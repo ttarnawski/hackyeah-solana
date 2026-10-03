@@ -1,92 +1,77 @@
 # Ad Marketplace
 
-A Solana MVP for fixed-price advertising slots. The `ad_marketplace` Anchor
-program owns listing state and enforces purchase availability. The existing
-course lending program is used only as an example of Anchor module organization;
-its source is not part of this project.
+The repository contains an Anchor program scaffold plus a lightweight frontend
+and backend scaffold for a Solana ad-slot auction demo.
 
 ## Repository layout
 
-- `programs/ad_marketplace/` — on-chain account state, instructions, events, and
-  validation.
-- `tests/` — Anchor integration tests for listing, purchase, cancellation, and
-  rejected operations.
-- `app/` — frontend boundary and responsibilities for the live demo.
-- There is no backend in the MVP. A future indexer may read program accounts and
-  events for search or notifications, but it must not authorize purchases,
-  move funds, or pick a winner.
+- `programs/ad_marketplace/` — current fixed-price Anchor program. Its on-chain
+  implementation is intentionally unchanged by the frontend/backend work.
+- `app/` — React/Vite client with Wallet Adapter connection and Solana Kit RPC
+  status checks.
+- `backend/` — Fastify API with SQLite-backed wallet sessions and listing
+  drafts.
+- `tests/` — Anchor integration tests for the current fixed-price program.
+- `backend/tests/` and `app/src/lib/` — backend and frontend unit tests.
 
-The on-chain module layout follows the useful pattern in the
-[course example](https://github.com/matzayonc/solana-live-course-2026/tree/master/holdup/programs/holdup/src):
-public instructions are exposed from `src/lib.rs`, while each handler and its
-Anchor account context live in `src/instructions/`.
+## Current scope and trust boundary
 
-## MVP behavior
+The existing Anchor source is **not yet an escrow auction program**. It does
+not implement starting bids, buyout, auction settlement, or bid refunds. The
+new UI therefore saves seller-owned metadata drafts, checks the configured
+Solana RPC through Kit, and provides explicit unavailable states for on-chain
+auction actions and bid history. It does not fabricate transaction successes.
 
-- `create_slot` creates a seller-scoped PDA and stores its fixed price, seller,
-  content URI, and `Available` status. Prices are in lamports; zero prices and
-  empty or overlong URIs are rejected.
-- `buy_slot` reads the price from the PDA, transfers SOL from the signing buyer
-  to the stored seller with the System Program, and records the buyer and
-  `Sold` status in the same transaction. Only a confirmed on-chain transaction
-  counts; concurrent purchases cannot both change the same available listing.
-- `cancel_slot` lets the original seller cancel an available listing. Sold and
-  cancelled listings cannot be bought or cancelled again.
-- The program emits events for listing creation, purchase, and cancellation.
+The backend stores draft metadata and, later, may index confirmed program
+events/accounts. It never accepts a bid, holds keys or SOL, settles an auction,
+or decides who won. Starting bid, buyout price, minimum increment, deadline,
+current bidder, escrow, settlement, and refund rules must be enforced by the
+future on-chain program. The database can cache those values for search, but
+chain state remains authoritative.
 
-The content URI points to off-chain campaign material. This MVP pays the seller
-immediately and does not escrow funds or enforce ad delivery. If a seller
-disappears after purchase, the program cannot refund the buyer. Escrow with
-explicit release/refund conditions is a possible next step if delivery
-protection is required.
+The selected auction model is ascending SOL bids with escrow, a fixed-price
+buyout, outbid refunds, and permissionless settlement after the end time.
+Cancellation is not offered by the frontend or backend. **The current Rust
+program still exposes `cancel_slot`; removing or disabling it for direct
+on-chain callers requires a later program change.** The existing chain code was
+not edited as requested.
 
-There is no marketplace admin instruction. As with a normal Anchor deployment,
-the program's upgrade authority can still change the code until that authority
-is explicitly revoked. Revocation is irreversible and should only happen after
-the deployed program has been reviewed.
+Wallet Adapter connection is not backend authentication. Draft writes require
+a one-time signed wallet challenge, verified by the API. That signature only
+authenticates the off-chain request; Solana transactions still require a
+separate wallet approval.
 
-## Build and test
+## Install and run
 
-Use the provided Solana/Anchor development container or install the Rust,
-Solana CLI, and Anchor toolchain. The configured test provider is localnet.
+This repo uses a pnpm workspace. From the workspace root:
 
 ```sh
 pnpm install
-anchor build
-anchor test
 ```
 
-The tests use a local validator and funded test wallets. They cover the core
-atomic state-and-payment flow, reject a repeat purchase, and verify cancellation
-and zero-price validation.
-
-## Devnet demo
-
-Set up a Solana wallet funded with devnet SOL, configure the Solana CLI to use
-devnet, and replace the placeholder program ID with the address derived from
-your generated program keypair. Keep `declare_id!` and both
-`[programs.*]` entries in sync. Do not commit wallet or program keypair files.
+Copy `backend/.env.example` to `backend/.env` and run the services in separate
+terminals:
 
 ```sh
-mkdir -p target/deploy
-solana-keygen new --no-bip39-passphrase -o target/deploy/ad_marketplace-keypair.json
-anchor keys sync
-solana config set --url devnet
-solana airdrop 2
-anchor build
-anchor deploy --provider.cluster devnet
+pnpm --filter @ad-marketplace/backend dev
+pnpm --filter @ad-marketplace/app dev
 ```
 
-The demo frontend must use the same devnet program ID and RPC cluster. Keep the
-transaction signature and open it in
-[Solana Explorer](https://explorer.solana.com/?cluster=devnet) to show its
-confirmation.
+The frontend defaults to Devnet RPC at `https://api.devnet.solana.com`; set
+`VITE_SOLANA_RPC_URL` in `app/.env` to use a different endpoint. The backend
+defaults to `http://localhost:3001`, and the Vite dev server proxies `/api`.
+Drafts are stored locally in `backend/data/marketplace.sqlite`.
 
-## Permissions and trust boundary
+## Validation
 
-- Only the seller who created a PDA can cancel its available listing.
-- Any distinct wallet can buy an available listing at the stored price.
-- The program performs the transfer and state update atomically; backend or
-  frontend code cannot award the slot by changing local data.
-- SOL is paid directly to the seller. Transaction fees and account rent are
-  separate from the advertised slot price.
+```sh
+pnpm run build:backend
+pnpm run build:app
+pnpm run test:backend
+pnpm run lint
+```
+
+The frontend cannot submit real bids or report a winner until a compatible
+auction program, generated IDL, deployed program ID, and chain indexer are
+provided. The future client will submit program instructions through standard
+Solana RPC; those instructions are not custom JSON-RPC methods.
