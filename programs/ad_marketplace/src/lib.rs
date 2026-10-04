@@ -1,41 +1,49 @@
 pub mod constants;
 pub mod error;
-pub mod events;
 pub mod instructions;
 pub mod state;
 
 use anchor_lang::prelude::*;
 
 pub use constants::*;
-pub use events::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("J3ejrxcdwFzS1MsYcPtA1XVvbssEuLhLSiu1zXf6YtJu");
+declare_id!("5dKLaVXqzR6Ja4GpkfseLCuPGDdnUFZ4cs6YkUSzMTdF");
 
 #[program]
 pub mod ad_marketplace {
     use super::*;
 
-    pub fn create_slot(
-        ctx: Context<CreateSlot>,
-        slot_id: u64,
-        price_lamports: u64,
-        content_uri: String,
+    pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
+        instructions::handle_initialize_config(ctx)
+    }
+
+    pub fn create_listing(
+        ctx: Context<CreateListing>,
+        listing_id: u64,
+        kyb_id: u32,
+        initial_auction_end_ts: i64,
+        cycle_duration: i64,
     ) -> Result<()> {
-        crate::instructions::create_slot::handle_create_slot(
+        instructions::handle_create_listing(
             ctx,
-            slot_id,
-            price_lamports,
-            content_uri,
+            listing_id,
+            kyb_id,
+            initial_auction_end_ts,
+            cycle_duration,
         )
     }
 
-    pub fn buy_slot(ctx: Context<BuySlot>, slot_id: u64) -> Result<()> {
-        crate::instructions::buy_slot::handle_buy_slot(ctx, slot_id)
+    pub fn verify_supplier_kyb(ctx: Context<VerifySupplierKyb>, is_verified: bool) -> Result<()> {
+        instructions::handle_verify_supplier_kyb(ctx, is_verified)
     }
 
-    pub fn cancel_slot(ctx: Context<CancelSlot>, slot_id: u64) -> Result<()> {
-        crate::instructions::cancel_slot::handle_cancel_slot(ctx, slot_id)
+    pub fn place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String) -> Result<()> {
+        instructions::handle_place_bid(ctx, bid_amount, ad_url)
+    }
+
+    pub fn claim_funds(ctx: Context<ClaimFunds>) -> Result<()> {
+        instructions::handle_claim_funds(ctx)
     }
 }

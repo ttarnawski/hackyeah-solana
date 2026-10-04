@@ -1,6 +1,11 @@
 target/
 node_modules/
+backend/data/
+app/dist/
+app/public/idl/
+backend/dist/
 test-ledger/
+.pnpm-store/
 .anchor/
 .surfpool/
 .env

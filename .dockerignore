@@ -1,0 +1,15 @@
+**/node_modules
+**/target
+**/.anchor
+**/test-ledger
+**/.surfpool
+**/.git
+**/.env
+**/.env.*
+!**/.env.example
+**/data
+**/*.log
+**/id.json
+**/keypair.json
+**/*-keypair.json
+.pnpm-store

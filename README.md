@@ -1,92 +1,162 @@
 # Ad Marketplace
 
-A Solana MVP for fixed-price advertising slots. The `ad_marketplace` Anchor
-program owns listing state and enforces purchase availability. The existing
-course lending program is used only as an example of Anchor module organization;
-its source is not part of this project.
+The repository contains an Anchor recurring ad-space auction plus a lightweight
+frontend and backend scaffold for a Solana ad-marketplace demo.
 
 ## Repository layout
 
-- `programs/ad_marketplace/` — on-chain account state, instructions, events, and
-  validation.
-- `tests/` — Anchor integration tests for listing, purchase, cancellation, and
-  rejected operations.
-- `app/` — frontend boundary and responsibilities for the live demo.
-- There is no backend in the MVP. A future indexer may read program accounts and
-  events for search or notifications, but it must not authorize purchases,
-  move funds, or pick a winner.
+- `programs/ad_marketplace/` — Anchor program with KYB-gated recurring listings,
+  escrowed SOL bids, immediate outbid refunds, and supplier claims.
+- `app/` — React/Vite client with Wallet Adapter connection and Solana Kit RPC
+  status checks.
+- `backend/` — Fastify API with SQLite-backed wallet sessions and listing
+  drafts.
+- `tests/` — Anchor integration tests covering KYB verification, bidding,
+  cycle rollover, outbid refunds, and supplier claims.
+- `backend/tests/` and `app/src/lib/` — backend and frontend unit tests.
 
-The on-chain module layout follows the useful pattern in the
-[course example](https://github.com/matzayonc/solana-live-course-2026/tree/master/holdup/programs/holdup/src):
-public instructions are exposed from `src/lib.rs`, while each handler and its
-Anchor account context live in `src/instructions/`.
+## Current scope and trust boundary
 
-## MVP behavior
+The Anchor program stores a global admin in the `config` PDA and creates
+recurring listings in `auction` PDAs. An admin must verify a supplier's KYB
+status before the listing accepts bids. The current winning bid is held in a
+separate `vault` PDA, not in the auction account. A higher bid immediately
+refunds the displaced leader in the same transaction.
 
-- `create_slot` creates a seller-scoped PDA and stores its fixed price, seller,
-  content URI, and `Available` status. Prices are in lamports; zero prices and
-  empty or overlong URIs are rejected.
-- `buy_slot` reads the price from the PDA, transfers SOL from the signing buyer
-  to the stored seller with the System Program, and records the buyer and
-  `Sold` status in the same transaction. Only a confirmed on-chain transaction
-  counts; concurrent purchases cannot both change the same available listing.
-- `cancel_slot` lets the original seller cancel an available listing. Sold and
-  cancelled listings cannot be bought or cancelled again.
-- The program emits events for listing creation, purchase, and cancellation.
+Each listing begins in an initial bidding period that closes at the
+supplier-chosen timestamp. The initial highest bid becomes
+`supplier_claimable` when a later `place_bid` or `claim_funds` instruction
+observes that deadline; recurring cycle 1 then starts at that timestamp.
+Recurring cycles advance lazily on a later bid or claim. At each cycle end, the
+leading bid becomes claimable and the next cycle begins. Only the supplier can
+withdraw settled funds with `claim_funds`; bids remain escrowed until
+settlement. Listings continue recurring after the initial close; they do not
+have a final expiry in the current program. New listings default to 30-day
+cycles, with a shorter duration available for tests. No cancellation or buyout
+instruction is exposed.
 
-The content URI points to off-chain campaign material. This MVP pays the seller
-immediately and does not escrow funds or enforce ad delivery. If a seller
-disappears after purchase, the program cannot refund the buyer. Escrow with
-explicit release/refund conditions is a possible next step if delivery
-protection is required.
+The backend stores seller-owned draft metadata. It never accepts a bid, holds
+keys or SOL, settles an auction, or decides who won. The frontend reads and
+submits auction instructions directly through Solana RPC and Wallet Adapter.
+Since the program stores current auction state rather than a bid event log, the
+app shows current winning positions and claimable funds, not historical bids.
 
-There is no marketplace admin instruction. As with a normal Anchor deployment,
-the program's upgrade authority can still change the code until that authority
-is explicitly revoked. Revocation is irreversible and should only happen after
-the deployed program has been reviewed.
+The app integration is Localnet-only and reads the generated Anchor IDL from
+`app/public/idl/ad_marketplace.json`. Off-chain drafts remain distinct from
+on-chain listings. On-chain listings store a supplier, listing ID, KYB ID, and cycle
+configuration. Draft campaign descriptions remain private off-chain; the
+current winning bidder supplies the ad image URL with their bid.
+Buyouts and cancellation are not implemented.
 
-## Build and test
+Wallet Adapter connection is not backend authentication. Draft writes require
+a one-time signed wallet challenge, verified by the API. That signature only
+authenticates the off-chain request; Solana transactions still require a
+separate wallet approval.
 
-Use the provided Solana/Anchor development container or install the Rust,
-Solana CLI, and Anchor toolchain. The configured test provider is localnet.
+## Actor journeys and presentation guide
+
+See [docs/README.md](./docs/README.md) for the full actor-by-actor walkthrough,
+from wallet connection and JavaScript calls to backend, RPC, Anchor program,
+escrow, settlement, and edge cases.
+
+## Install and run
+
+This repo uses a pnpm workspace. From the workspace root:
 
 ```sh
 pnpm install
-anchor build
-anchor test
 ```
 
-The tests use a local validator and funded test wallets. They cover the core
-atomic state-and-payment flow, reject a repeat purchase, and verify cancellation
-and zero-price validation.
-
-## Devnet demo
-
-Set up a Solana wallet funded with devnet SOL, configure the Solana CLI to use
-devnet, and replace the placeholder program ID with the address derived from
-your generated program keypair. Keep `declare_id!` and both
-`[programs.*]` entries in sync. Do not commit wallet or program keypair files.
+Copy `backend/.env.example` to `backend/.env` and `app/.env.example` to
+`app/.env`, then run the services in separate terminals:
 
 ```sh
-mkdir -p target/deploy
-solana-keygen new --no-bip39-passphrase -o target/deploy/ad_marketplace-keypair.json
-anchor keys sync
-solana config set --url devnet
-solana airdrop 2
-anchor build
-anchor deploy --provider.cluster devnet
+pnpm --filter @ad-marketplace/backend dev
+pnpm --filter @ad-marketplace/app dev
 ```
 
-The demo frontend must use the same devnet program ID and RPC cluster. Keep the
-transaction signature and open it in
-[Solana Explorer](https://explorer.solana.com/?cluster=devnet) to show its
-confirmation.
+The app defaults to Localnet RPC at `http://127.0.0.1:8899` and the program ID
+declared for Localnet in `Anchor.toml`. Auction reads and writes are disabled
+for non-loopback RPC endpoints. The backend defaults to `http://localhost:3001`,
+and the Vite dev server proxies `/api`. Drafts are stored locally in
+`backend/data/marketplace.sqlite`.
 
-## Permissions and trust boundary
+## Dev container
 
-- Only the seller who created a PDA can cancel its available listing.
-- Any distinct wallet can buy an available listing at the stored price.
-- The program performs the transfer and state update atomically; backend or
-  frontend code cannot award the slot by changing local data.
-- SOL is paid directly to the seller. Transaction fees and account rent are
-  separate from the advertised slot price.
+This repository includes its own Dev Container definition and Dockerfile. Open
+this repository itself in VS Code and run **Dev Containers: Reopen in
+Container**. The image includes Anchor, Rust, Solana CLI, and Surfpool; the
+first container setup installs the pnpm workspace dependencies into
+container-only volumes, leaving any Windows `node_modules` untouched. RPC,
+WebSocket, backend, and frontend ports are forwarded from the container.
+The Vite server listens on the container network so the forwarded frontend is
+available from the host at `http://localhost:5173`.
+
+## Validation
+
+```sh
+pnpm run build:backend
+pnpm run build:app
+pnpm run test:backend
+pnpm run lint
+```
+
+For a Localnet deployment, start Surfpool in a container terminal. The database
+file keeps local chain state in the ignored `.surfpool/` directory across
+container rebuilds:
+
+```sh
+mkdir -p .surfpool
+surfpool start --no-deploy --db .surfpool/ad-marketplace.sqlite
+```
+
+In another container terminal, build and deploy this workspace's program:
+
+```sh
+pnpm run anchor:build:localnet
+pnpm run anchor:deploy:localnet
+```
+
+Then run these in separate terminals:
+
+```sh
+pnpm --filter @ad-marketplace/backend dev
+pnpm --filter @ad-marketplace/app dev
+```
+
+### Live Localnet demo
+
+Choose a dedicated wallet you control as the KYB admin before selecting
+**Initialize Localnet admin**. The first wallet to initialize the config
+becomes the admin, and the current program has no admin-transfer instruction.
+The deployment upgrade-authority wallet is separate; deploying the program
+does not initialize the marketplace admin.
+
+Fund each admin, supplier, and bidder wallet with fake SOL from a container
+terminal while Surfpool is running:
+
+```sh
+solana airdrop 10 <WALLET_PUBLIC_KEY> --url http://127.0.0.1:8899
+solana balance <WALLET_PUBLIC_KEY> --url http://127.0.0.1:8899
+```
+
+On the app's **Create listing** page, use the Localnet form at the top to
+create an on-chain auction. The lower form only saves a private draft. The
+on-chain auction is visible to wallets connected to the same Localnet. The top
+form's initial close timestamp controls the first bidding period; it does not
+permanently end the listing. The lower draft's title, description, proposed
+pricing, and proposed end date are not published or enforced by the current
+program. Each bidder supplies the ad image URL with their bid. The admin must
+verify the supplier before bids are accepted.
+
+This Localnet is bound to the demo host's loopback address. Wallets on other
+computers will resolve `127.0.0.1` to their own computer, not this validator.
+For a remote demo, use a shared reachable cluster and update the app's
+Localnet-only RPC restriction deliberately.
+
+Keep Solana wallet and program keypairs out of source control. Do not run
+`solana-test-validator --reset` alongside the Surfpool Localnet.
+
+`anchor test` runs the headless lifecycle tests against a local validator. They
+cover the KYB gate, immediate outbid refunds, lazy cycle settlement, and
+supplier withdrawal.
