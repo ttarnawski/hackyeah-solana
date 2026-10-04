@@ -2,7 +2,7 @@ import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { Keypair, LAMPORTS_PER_SOL, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { AdMarketplace } from "../target/types/ad_marketplace";
+import type { AdMarketplace } from "../target/types/ad_marketplace";
 
 describe("ad_marketplace initial and recurring auctions", function () {
   this.timeout(120_000);
@@ -26,6 +26,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
     listingId,
     program.programId,
   );
+  const listingMetadata = deriveListingMetadata(auction, program.programId);
   const vault = deriveVault(auction, program.programId);
 
   before(async () => {
@@ -72,11 +73,15 @@ describe("ad_marketplace initial and recurring auctions", function () {
         .createListing(
           listingId,
           1_234_567,
+          "Homepage placement",
+          "Recurring advertising space on the homepage.",
+          sol(5),
           new anchor.BN(currentBlockTime),
           new anchor.BN(3),
         )
         .accountsPartial({
           auction,
+          listingMetadata,
           vault,
           supplier: supplier.publicKey,
           systemProgram: SystemProgram.programId,
@@ -90,11 +95,15 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .createListing(
         listingId,
         1_234_567,
+        "Homepage placement",
+        "Recurring advertising space on the homepage.",
+        sol(5),
         initialAuctionEndTs,
         new anchor.BN(3),
       )
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
@@ -115,12 +124,24 @@ describe("ad_marketplace initial and recurring auctions", function () {
       initialAuction.cycleStartTs.toString(),
       initialAuctionEndTs.toString(),
     );
+    const initialMetadata = await program.account.listingMetadata.fetch(
+      listingMetadata,
+      "confirmed",
+    );
+    assert.equal(initialMetadata.title, "Homepage placement");
+    assert.equal(
+      initialMetadata.description,
+      "Recurring advertising space on the homepage.",
+    );
+    assert.equal(initialMetadata.buyoutPrice.toString(), sol(5).toString());
+    assert.equal(initialMetadata.isClosed, false);
 
     await expectInstructionFailure(
       program.methods
         .placeBid(sol(1), "https://example.com/ad-a")
         .accountsPartial({
           auction,
+          listingMetadata,
           vault,
           bidder: bidderA.publicKey,
           previousWinner: bidderA.publicKey,
@@ -145,6 +166,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .placeBid(bidA, "https://example.com/ad-a")
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         bidder: bidderA.publicKey,
         previousWinner: bidderA.publicKey,
@@ -176,6 +198,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .placeBid(bidB, "https://example.com/ad-b")
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         bidder: bidderB.publicKey,
         previousWinner: bidderA.publicKey,
@@ -214,6 +237,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .placeBid(bidC, "https://example.com/ad-c")
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         bidder: bidderC.publicKey,
         previousWinner: bidderB.publicKey,
@@ -268,6 +292,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .claimFunds()
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
@@ -304,6 +329,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .placeBid(bidD, "https://example.com/ad-d")
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         bidder: bidderA.publicKey,
         previousWinner: bidderC.publicKey,
@@ -338,6 +364,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       .claimFunds()
       .accountsPartial({
         auction,
+        listingMetadata,
         vault,
         supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
@@ -353,6 +380,147 @@ describe("ad_marketplace initial and recurring auctions", function () {
       await connection.getBalance(vault, "confirmed"),
       bidD.toNumber(),
     );
+
+    const buyoutListingId = new anchor.BN(listingId.toString()).addn(1);
+    const buyoutAuction = deriveAuction(
+      supplier.publicKey,
+      buyoutListingId,
+      program.programId,
+    );
+    const buyoutMetadata = deriveListingMetadata(
+      buyoutAuction,
+      program.programId,
+    );
+    const buyoutVault = deriveVault(buyoutAuction, program.programId);
+    const buyoutSlot = await connection.getSlot("confirmed");
+    const buyoutBlockTime = await connection.getBlockTime(buyoutSlot);
+    if (buyoutBlockTime === null) {
+      throw new Error(
+        `No block time is available for local slot ${buyoutSlot}.`,
+      );
+    }
+
+    await program.methods
+      .createListing(
+        buyoutListingId,
+        7_654_321,
+        "Limited campaign",
+        "One-time buyout closes this listing permanently.",
+        sol(1),
+        new anchor.BN(buyoutBlockTime + 60),
+        new anchor.BN(30 * 86_400),
+      )
+      .accountsPartial({
+        auction: buyoutAuction,
+        listingMetadata: buyoutMetadata,
+        vault: buyoutVault,
+        supplier: supplier.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([supplier])
+      .rpc();
+    await program.methods
+      .verifySupplierKyb(true)
+      .accountsPartial({ config, auction: buyoutAuction, admin })
+      .rpc();
+
+    const firstBuyoutBid = sol(0.5);
+    await program.methods
+      .placeBid(firstBuyoutBid, "https://example.com/first.png")
+      .accountsPartial({
+        auction: buyoutAuction,
+        listingMetadata: buyoutMetadata,
+        vault: buyoutVault,
+        bidder: bidderA.publicKey,
+        previousWinner: bidderA.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([bidderA])
+      .rpc();
+    const bidderABalanceBeforeBuyout = await connection.getBalance(
+      bidderA.publicKey,
+      "confirmed",
+    );
+
+    const overBuyoutBid = sol(1.2);
+    await program.methods
+      .placeBid(overBuyoutBid, "https://example.com/buyout.png")
+      .accountsPartial({
+        auction: buyoutAuction,
+        listingMetadata: buyoutMetadata,
+        vault: buyoutVault,
+        bidder: bidderC.publicKey,
+        previousWinner: bidderA.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([bidderC])
+      .rpc();
+
+    assert.equal(
+      (await connection.getBalance(bidderA.publicKey, "confirmed")) -
+        bidderABalanceBeforeBuyout,
+      firstBuyoutBid.toNumber(),
+    );
+    assert.equal(
+      await connection.getBalance(buyoutVault, "confirmed"),
+      sol(1).toNumber(),
+    );
+    const boughtOutAuction = await program.account.auction.fetch(
+      buyoutAuction,
+      "confirmed",
+    );
+    const boughtOutMetadata = await program.account.listingMetadata.fetch(
+      buyoutMetadata,
+      "confirmed",
+    );
+    assert.equal(boughtOutAuction.currentHighestBid.toNumber(), 0);
+    assert.equal(
+      boughtOutAuction.currentWinner.toBase58(),
+      bidderC.publicKey.toBase58(),
+    );
+    assert.equal(
+      boughtOutAuction.supplierClaimable.toNumber(),
+      sol(1).toNumber(),
+    );
+    assert.equal(boughtOutMetadata.isClosed, true);
+
+    await expectInstructionFailure(
+      program.methods
+        .placeBid(sol(1.3), "https://example.com/after-buyout.png")
+        .accountsPartial({
+          auction: buyoutAuction,
+          listingMetadata: buyoutMetadata,
+          vault: buyoutVault,
+          bidder: bidderB.publicKey,
+          previousWinner: bidderC.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([bidderB])
+        .rpc(),
+      "ListingClosed",
+    );
+
+    const supplierBalanceBeforeBuyoutClaim = await connection.getBalance(
+      supplier.publicKey,
+      "confirmed",
+    );
+    await program.methods
+      .claimFunds()
+      .accountsPartial({
+        auction: buyoutAuction,
+        listingMetadata: buyoutMetadata,
+        vault: buyoutVault,
+        supplier: supplier.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([supplier])
+      .rpc();
+    assert.equal(
+      (await connection.getBalance(supplier.publicKey, "confirmed")) -
+        supplierBalanceBeforeBuyoutClaim,
+      sol(1).toNumber(),
+    );
+    assert.equal(await connection.getBalance(buyoutVault, "confirmed"), 0);
   });
 });
 
@@ -444,6 +612,16 @@ function deriveVault(
 ) {
   return anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("vault"), auction.toBuffer()],
+    programId,
+  )[0];
+}
+
+function deriveListingMetadata(
+  auction: anchor.web3.PublicKey,
+  programId: anchor.web3.PublicKey,
+) {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("listing_metadata"), auction.toBuffer()],
     programId,
   )[0];
 }

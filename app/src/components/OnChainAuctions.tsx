@@ -19,6 +19,7 @@ import {
   createOnChainListing,
   fetchAuctionSnapshot,
   initializeAdminConfig,
+  initializeOnChainListingMetadata,
   placeOnChainBid,
   setSupplierKybVerified,
   type AuctionSnapshot,
@@ -118,11 +119,11 @@ export function OnChainAuctions({
       return auctions.filter((auction) => auction.supplier === walletAddress);
     }
     if (view === "bids") {
+      if (!walletAddress) return [];
       return auctions.filter(
         (auction) =>
           auction.currentWinner === walletAddress ||
-          (auction.supplier === walletAddress &&
-            BigInt(auction.supplierClaimable) > 0n),
+          auction.supplier === walletAddress,
       );
     }
     return auctions;
@@ -138,13 +139,36 @@ export function OnChainAuctions({
   const createListing = (input: {
     listingId: string;
     kybId: number;
+    title: string;
+    description: string;
+    buyoutPriceLamports: string;
     initialAuctionEndTs: string;
     cycleDurationSeconds: string;
   }) =>
     void runTransaction(
       `create-listing:${input.listingId}`,
-      `Listing ${input.listingId} created. It remains unable to accept bids until an admin verifies its supplier.`,
+      `Listing ${input.listingId} and its public details created. It remains unable to accept bids until an admin verifies its supplier.`,
       (wallet) => createOnChainListing(connection, wallet, input),
+    );
+
+  const initializeMetadata = (
+    auction: OnChainAuction,
+    input: {
+      title: string;
+      description: string;
+      buyoutPriceLamports: string;
+    },
+  ) =>
+    void runTransaction(
+      `metadata:${auction.address}`,
+      `Public details saved for listing ${auction.listingId}.`,
+      (wallet) =>
+        initializeOnChainListingMetadata(
+          connection,
+          wallet,
+          new PublicKey(auction.address),
+          input,
+        ),
     );
 
   const verifySupplier = (auction: OnChainAuction, isVerified: boolean) =>
@@ -312,7 +336,7 @@ export function OnChainAuctions({
             </div>
           </div>
           {walletAddress && visibleAuctions.length > 0 ? (
-            <div className="draft-list">
+            <div className="listing-list">
               {visibleAuctions.map((auction) => (
                 <AuctionCard
                   adminAddress={snapshotState.snapshot.admin}
@@ -321,6 +345,7 @@ export function OnChainAuctions({
                   currentUnixTimestamp={currentUnixTimestamp}
                   key={auction.address}
                   onClaim={claimFunds}
+                  onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
                   walletAddress={walletAddress}
@@ -357,7 +382,7 @@ export function OnChainAuctions({
               </button>
             </div>
           ) : (
-            <div className="draft-list">
+            <div className="listing-list">
               {visibleAuctions.map((auction) => (
                 <AuctionCard
                   adminAddress={snapshotState.snapshot.admin}
@@ -366,6 +391,7 @@ export function OnChainAuctions({
                   currentUnixTimestamp={currentUnixTimestamp}
                   key={auction.address}
                   onClaim={claimFunds}
+                  onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
                   walletAddress={walletAddress}
@@ -388,14 +414,14 @@ export function OnChainAuctions({
             </div>
           ) : visibleAuctions.length === 0 ? (
             <div className="empty-state small-empty">
-              <h3>No active winning bids or claimable funds</h3>
+              <h3>No auctions owned or led by this wallet</h3>
               <p>
-                The program stores current auction state, not a historical bid
-                log. Outbid history requires an indexer and is not shown here.
+                This tab includes every listing created by this wallet and any
+                listing where it currently leads. Outbid history is not stored.
               </p>
             </div>
           ) : (
-            <div className="draft-list">
+            <div className="listing-list">
               {visibleAuctions.map((auction) => (
                 <AuctionCard
                   adminAddress={snapshotState.snapshot.admin}
@@ -404,6 +430,7 @@ export function OnChainAuctions({
                   currentUnixTimestamp={currentUnixTimestamp}
                   key={auction.address}
                   onClaim={claimFunds}
+                  onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
                   walletAddress={walletAddress}
@@ -423,6 +450,9 @@ interface OnChainListingFormProps {
   onCreate: (input: {
     listingId: string;
     kybId: number;
+    title: string;
+    description: string;
+    buyoutPriceLamports: string;
     initialAuctionEndTs: string;
     cycleDurationSeconds: string;
   }) => void;
@@ -433,6 +463,9 @@ function OnChainListingForm({
   walletReady,
   onCreate,
 }: OnChainListingFormProps) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [buyoutPriceSol, setBuyoutPriceSol] = useState("0");
   const [kybId, setKybId] = useState("");
   const [cycleDays, setCycleDays] = useState("30");
   const [initialAuctionEndsAt, setInitialAuctionEndsAt] = useState(() =>
@@ -445,6 +478,20 @@ function OnChainListingForm({
     setValidationError(null);
     if (!/^\d{7}$/.test(kybId)) {
       setValidationError("KYB ID must be a 7-digit integer.");
+      return;
+    }
+    if (title.trim().length === 0) {
+      setValidationError("Enter a listing title.");
+      return;
+    }
+    if (new TextEncoder().encode(title).length > 100) {
+      setValidationError("Listing title must be no more than 100 UTF-8 bytes.");
+      return;
+    }
+    if (new TextEncoder().encode(description).length > 3_000) {
+      setValidationError(
+        "Listing description must be no more than 3000 UTF-8 bytes.",
+      );
       return;
     }
     const initialAuctionEndMs = new Date(initialAuctionEndsAt).getTime();
@@ -472,17 +519,60 @@ function OnChainListingForm({
       return;
     }
 
-    onCreate({
-      listingId: createListingId(),
-      kybId: Number(kybId),
-      initialAuctionEndTs: Math.floor(initialAuctionEndMs / 1_000).toString(),
-      cycleDurationSeconds: cycleDurationSeconds.toString(),
-    });
+    try {
+      onCreate({
+        listingId: createListingId(),
+        kybId: Number(kybId),
+        title,
+        description,
+        buyoutPriceLamports: solToLamports(buyoutPriceSol, true),
+        initialAuctionEndTs: Math.floor(initialAuctionEndMs / 1_000).toString(),
+        cycleDurationSeconds: cycleDurationSeconds.toString(),
+      });
+    } catch (error) {
+      setValidationError(errorMessage(error, "Check the listing fields."));
+    }
   }
 
   return (
     <form className="listing-form on-chain-listing-form" onSubmit={submit}>
+      <label>
+        Public listing name
+        <input
+          maxLength={100}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Example: Homepage hero placement"
+          required
+          value={title}
+        />
+      </label>
+      <label>
+        Public description
+        <textarea
+          maxLength={3_000}
+          onChange={(event) => setDescription(event.target.value)}
+          placeholder="Describe the ad placement and what the buyer receives."
+          required
+          rows={4}
+          value={description}
+        />
+        <span className="input-unit">
+          {new TextEncoder().encode(description).length}/3000 UTF-8 bytes
+        </span>
+      </label>
       <div className="form-row">
+        <label>
+          Buyout price <span className="input-unit">SOL</span>
+          <input
+            inputMode="decimal"
+            min="0"
+            onChange={(event) => setBuyoutPriceSol(event.target.value)}
+            required
+            step="any"
+            type="number"
+            value={buyoutPriceSol}
+          />
+        </label>
         <label>
           Supplier KYB ID
           <input
@@ -496,6 +586,8 @@ function OnChainListingForm({
             value={kybId}
           />
         </label>
+      </div>
+      <div className="form-row">
         <label>
           Initial auction closes
           <input
@@ -520,9 +612,11 @@ function OnChainListingForm({
         />
       </label>
       <p className="form-hint">
-        The initial auction settles at its close time. The first recurring cycle
-        starts then; later cycles use this duration (default 30 days). The ad
-        image URL is supplied with each bid.
+        Listing name and description are public on-chain. Enter 0 SOL to disable
+        buyout; a bid at or above the configured price ends the listing
+        permanently, charges exactly that price, and refunds any excess. The
+        initial auction close starts recurring cycles; the ad image URL comes
+        from each bidder.
       </p>
       {validationError && (
         <div className="notice error-notice" role="alert">
@@ -551,6 +645,14 @@ interface AuctionCardProps {
   busy: boolean;
   currentUnixTimestamp: number;
   onClaim: (auction: OnChainAuction) => void;
+  onInitializeMetadata: (
+    auction: OnChainAuction,
+    input: {
+      title: string;
+      description: string;
+      buyoutPriceLamports: string;
+    },
+  ) => void;
   onPlaceBid: (
     auction: OnChainAuction,
     amountSol: string,
@@ -566,12 +668,17 @@ function AuctionCard({
   busy,
   currentUnixTimestamp,
   onClaim,
+  onInitializeMetadata,
   onPlaceBid,
   onSetVerified,
   walletAddress,
 }: AuctionCardProps) {
   const [amountSol, setAmountSol] = useState("");
   const [adUrl, setAdUrl] = useState("");
+  const [metadataTitle, setMetadataTitle] = useState("");
+  const [metadataDescription, setMetadataDescription] = useState("");
+  const [metadataBuyoutPriceSol, setMetadataBuyoutPriceSol] = useState("0");
+  const [metadataError, setMetadataError] = useState<string | null>(null);
   const isAdmin = walletAddress !== null && walletAddress === adminAddress;
   const isSupplier =
     walletAddress !== null && walletAddress === auction.supplier;
@@ -580,7 +687,8 @@ function AuctionCard({
   const settlementDueAt = isInitialAuction
     ? BigInt(auction.cycleStartTs)
     : BigInt(auction.cycleStartTs) + BigInt(auction.cycleDuration);
-  const settlementDue = BigInt(currentUnixTimestamp) >= settlementDueAt;
+  const settlementDue =
+    !auction.isClosed && BigInt(currentUnixTimestamp) >= settlementDueAt;
   const unsettledBidAmount =
     settlementDue && BigInt(auction.currentHighestBid) > 0n
       ? BigInt(auction.currentHighestBid)
@@ -593,15 +701,58 @@ function AuctionCard({
     onPlaceBid(auction, amountSol, adUrl);
   }
 
+  function submitMetadata(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMetadataError(null);
+    if (metadataTitle.trim().length === 0) {
+      setMetadataError("Enter a listing title.");
+      return;
+    }
+    if (new TextEncoder().encode(metadataTitle).length > 100) {
+      setMetadataError("Listing title must be no more than 100 UTF-8 bytes.");
+      return;
+    }
+    if (new TextEncoder().encode(metadataDescription).length > 3_000) {
+      setMetadataError(
+        "Listing description must be no more than 3000 UTF-8 bytes.",
+      );
+      return;
+    }
+    try {
+      onInitializeMetadata(auction, {
+        title: metadataTitle,
+        description: metadataDescription,
+        buyoutPriceLamports: solToLamports(metadataBuyoutPriceSol, true),
+      });
+    } catch (error) {
+      setMetadataError(errorMessage(error, "Check the listing details."));
+    }
+  }
+
   return (
-    <article className="draft-card auction-card">
-      <div className="draft-card-heading">
-        <strong>Listing {auction.listingId}</strong>
-        <span className={auction.isKybVerified ? "draft-badge" : "kyb-pending"}>
-          {auction.isKybVerified ? "KYB VERIFIED" : "KYB PENDING"}
+    <article className="listing-card auction-card">
+      <div className="listing-card-heading">
+        <strong>{auction.title ?? `Listing ${auction.listingId}`}</strong>
+        <span
+          className={
+            auction.isClosed
+              ? "closed-badge"
+              : auction.isKybVerified
+                ? "listing-badge"
+                : "kyb-pending"
+          }
+        >
+          {auction.isClosed
+            ? "BUYOUT COMPLETE"
+            : auction.isKybVerified
+              ? "KYB VERIFIED"
+              : "KYB PENDING"}
         </span>
       </div>
-      <div className="draft-terms auction-terms">
+      {auction.description && (
+        <p className="auction-description">{auction.description}</p>
+      )}
+      <div className="listing-terms auction-terms">
         <span>Supplier {shortAddress(auction.supplier)}</span>
         <span>KYB ID {auction.kybId}</span>
         <span>
@@ -614,7 +765,11 @@ function AuctionCard({
             ? `Closes ${formatUnixTimestamp(auction.cycleStartTs)}`
             : `Length ${formatDuration(auction.cycleDuration)}`}
         </span>
-        <span>Highest {lamportsToSol(auction.currentHighestBid)} SOL</span>
+        <span>
+          {auction.isClosed
+            ? `Buyout ${lamportsToSol(auction.buyoutPriceLamports)} SOL`
+            : `Highest ${lamportsToSol(auction.currentHighestBid)} SOL`}
+        </span>
       </div>
       {auction.currentWinner && (
         <p className="auction-detail">
@@ -626,6 +781,75 @@ function AuctionCard({
           Current leader&apos;s ad image URL:{" "}
           <span title={auction.adUrl}>{auction.adUrl}</span>
         </p>
+      )}
+      {auction.isClosed && (
+        <p className="auction-detail">
+          This listing has ended permanently. The buyout winner is{" "}
+          {auction.currentWinner
+            ? shortAddress(auction.currentWinner)
+            : "not recorded"}
+          .
+        </p>
+      )}
+      {!auction.metadataInitialized && (
+        <div className="notice warning-notice">
+          <strong>Public listing details are not initialized.</strong>
+          <p>
+            This listing predates on-chain metadata. Its supplier must publish
+            the title, description, and optional buyout before bidding can
+            continue.
+          </p>
+          {isSupplier && (
+            <form
+              className="listing-form metadata-form"
+              onSubmit={submitMetadata}
+            >
+              <label>
+                Public listing name
+                <input
+                  maxLength={100}
+                  onChange={(event) => setMetadataTitle(event.target.value)}
+                  required
+                  value={metadataTitle}
+                />
+              </label>
+              <label>
+                Public description
+                <textarea
+                  maxLength={3_000}
+                  onChange={(event) =>
+                    setMetadataDescription(event.target.value)
+                  }
+                  required
+                  rows={3}
+                  value={metadataDescription}
+                />
+              </label>
+              <label>
+                Buyout price <span className="input-unit">SOL</span>
+                <input
+                  inputMode="decimal"
+                  min="0"
+                  onChange={(event) =>
+                    setMetadataBuyoutPriceSol(event.target.value)
+                  }
+                  required
+                  step="any"
+                  type="number"
+                  value={metadataBuyoutPriceSol}
+                />
+              </label>
+              {metadataError && (
+                <div className="notice error-notice" role="alert">
+                  {metadataError}
+                </div>
+              )}
+              <button className="primary-button" disabled={busy} type="submit">
+                {busy ? "Waiting for wallet…" : "Publish listing details"}
+              </button>
+            </form>
+          )}
+        </div>
       )}
       {hasClaimableFunds && (
         <p className="auction-detail">
@@ -654,65 +878,82 @@ function AuctionCard({
         </button>
       )}
 
-      <form className="listing-form auction-bid-form" onSubmit={submitBid}>
-        <div className="form-row">
-          <label>
-            Your bid <span className="input-unit">SOL</span>
-            <input
-              inputMode="decimal"
-              min="0.000000001"
-              onChange={(event) => setAmountSol(event.target.value)}
-              placeholder="0.25"
-              required
-              step="any"
-              type="number"
-              value={amountSol}
-            />
-          </label>
-          <label>
-            Your ad image URL
-            <input
-              maxLength={128}
-              onChange={(event) => setAdUrl(event.target.value)}
-              placeholder="https://example.com/ad-image.png"
-              required
-              type="url"
-              value={adUrl}
-            />
-          </label>
-        </div>
-        <p className="form-hint">
-          Bids must exceed the current highest bid. Outbid leaders are refunded
-          immediately. Your ad image URL is stored with your bid and shown while
-          you are the leader; the limit is 128 UTF-8 bytes.
-        </p>
-        {!auction.isKybVerified && (
+      {auction.metadataInitialized && !auction.isClosed && (
+        <form className="listing-form auction-bid-form" onSubmit={submitBid}>
+          <div className="form-row">
+            <label>
+              Your bid <span className="input-unit">SOL</span>
+              <input
+                inputMode="decimal"
+                min="0.000000001"
+                onChange={(event) => setAmountSol(event.target.value)}
+                placeholder="0.25"
+                required
+                step="any"
+                type="number"
+                value={amountSol}
+              />
+            </label>
+            <label>
+              Your ad image URL
+              <input
+                maxLength={128}
+                onChange={(event) => setAdUrl(event.target.value)}
+                placeholder="https://example.com/ad-image.png"
+                required
+                type="url"
+                value={adUrl}
+              />
+            </label>
+          </div>
           <p className="form-hint">
-            Bidding is disabled until an admin verifies this supplier.
+            Bids must exceed the current highest bid. Outbid leaders are
+            refunded immediately. Your ad image URL is stored with your bid and
+            shown while you are the leader; the limit is 128 UTF-8 bytes.
           </p>
-        )}
-        {!walletAddress && (
-          <p className="form-hint">Connect a wallet to place a bid.</p>
-        )}
-        <button
-          className="primary-button"
-          disabled={busy || !walletAddress || !auction.isKybVerified}
-          type="submit"
-        >
-          {busy ? "Waiting for wallet…" : "Place bid"}
-        </button>
-      </form>
-
-      {isSupplier && claimableAfterSettlement > 0n && (
-        <button
-          className="secondary-button auction-claim-action"
-          disabled={busy}
-          onClick={() => onClaim(auction)}
-          type="button"
-        >
-          Claim {lamportsToSol(claimableAfterSettlement.toString())} SOL
-        </button>
+          {BigInt(auction.buyoutPriceLamports) > 0n && (
+            <p className="form-hint">
+              A bid at or above the {lamportsToSol(auction.buyoutPriceLamports)}{" "}
+              SOL buyout permanently ends this listing. Any amount above the
+              buyout is refunded in the same transaction.
+            </p>
+          )}
+          {!auction.isKybVerified && (
+            <p className="form-hint">
+              Bidding is disabled until an admin verifies this supplier.
+            </p>
+          )}
+          {!walletAddress && (
+            <p className="form-hint">Connect a wallet to place a bid.</p>
+          )}
+          <button
+            className="primary-button"
+            disabled={
+              busy ||
+              !walletAddress ||
+              !auction.isKybVerified ||
+              auction.isClosed ||
+              !auction.metadataInitialized
+            }
+            type="submit"
+          >
+            {busy ? "Waiting for wallet…" : "Place bid"}
+          </button>
+        </form>
       )}
+
+      {isSupplier &&
+        auction.metadataInitialized &&
+        claimableAfterSettlement > 0n && (
+          <button
+            className="secondary-button auction-claim-action"
+            disabled={busy}
+            onClick={() => onClaim(auction)}
+            type="button"
+          >
+            Claim {lamportsToSol(claimableAfterSettlement.toString())} SOL
+          </button>
+        )}
     </article>
   );
 }

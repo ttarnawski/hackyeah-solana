@@ -33,3 +33,19 @@ pub struct Auction {
 impl Auction {
     pub const SPACE: usize = 256;
 }
+
+#[account]
+pub struct ListingMetadata {
+    pub auction: Pubkey,
+    pub title: String,
+    pub description: String,
+    pub buyout_price: u64,
+    pub is_closed: bool,
+    pub bump: u8,
+}
+
+impl ListingMetadata {
+    pub fn space(title_length: usize, description_length: usize) -> usize {
+        8 + 32 + 4 + title_length + 4 + description_length + 8 + 1 + 1
+    }
+}

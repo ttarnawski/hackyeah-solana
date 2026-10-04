@@ -23,6 +23,9 @@ pub mod ad_marketplace {
         ctx: Context<CreateListing>,
         listing_id: u64,
         kyb_id: u32,
+        title: String,
+        description: String,
+        buyout_price: u64,
         initial_auction_end_ts: i64,
         cycle_duration: i64,
     ) -> Result<()> {
@@ -30,9 +33,21 @@ pub mod ad_marketplace {
             ctx,
             listing_id,
             kyb_id,
+            title,
+            description,
+            buyout_price,
             initial_auction_end_ts,
             cycle_duration,
         )
+    }
+
+    pub fn initialize_listing_metadata(
+        ctx: Context<InitializeListingMetadata>,
+        title: String,
+        description: String,
+        buyout_price: u64,
+    ) -> Result<()> {
+        instructions::handle_initialize_listing_metadata(ctx, title, description, buyout_price)
     }
 
     pub fn verify_supplier_kyb(ctx: Context<VerifySupplierKyb>, is_verified: bool) -> Result<()> {

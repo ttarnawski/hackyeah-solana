@@ -1,6 +1,6 @@
 const LAMPORTS_PER_SOL = 1_000_000_000n;
 
-export function solToLamports(value: string): string {
+export function solToLamports(value: string, allowZero = false): string {
   const match = /^(0|[1-9]\d*)(?:\.(\d{0,9}))?$/.exec(value.trim());
   if (!match) {
     throw new Error("Enter a SOL amount with at most 9 decimal places.");
@@ -9,9 +9,11 @@ export function solToLamports(value: string): string {
   const whole = BigInt(match[1]);
   const fractional = BigInt((match[2] ?? "").padEnd(9, "0") || "0");
   const lamports = whole * LAMPORTS_PER_SOL + fractional;
-  if (lamports <= 0n || lamports > (1n << 64n) - 1n) {
+  if ((!allowZero && lamports <= 0n) || lamports > (1n << 64n) - 1n) {
     throw new Error(
-      "Amount must be a positive value within the Solana u64 range.",
+      allowZero
+        ? "Amount must be a non-negative value within the Solana u64 range."
+        : "Amount must be a positive value within the Solana u64 range.",
     );
   }
   return lamports.toString();
