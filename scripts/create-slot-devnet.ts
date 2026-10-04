@@ -6,8 +6,8 @@ import { AdMarketplace } from "../target/types/ad_marketplace";
 
 const DEVNET_RPC = "https://api.devnet.solana.com";
 
-describe("create_slot on Devnet", () => {
-  it("creates and verifies a listing", async () => {
+describe("create_listing on Devnet", () => {
+  it("creates a recurring auction listing", async () => {
     const provider = anchor.AnchorProvider.env();
     if (new URL(provider.connection.rpcEndpoint).origin !== DEVNET_RPC) {
       throw new Error(`This example only runs on ${DEVNET_RPC}.`);
@@ -25,42 +25,66 @@ describe("create_slot on Devnet", () => {
       );
     }
 
-    const seller = provider.wallet.publicKey;
-    const balance = await provider.connection.getBalance(seller, "confirmed");
+    const supplier = provider.wallet.publicKey;
+    const balance = await provider.connection.getBalance(supplier, "confirmed");
     if (balance === 0) {
       throw new Error(
-        `The seller wallet needs Devnet SOL. Fund it with: solana airdrop 2 --url ${DEVNET_RPC}`,
+        `The supplier wallet needs Devnet SOL. Fund it with: solana airdrop 2 --url ${DEVNET_RPC}`,
       );
     }
 
-    const slotId = new anchor.BN(Date.now())
+    const listingId = new anchor.BN(Date.now())
       .muln(1_000)
       .addn(Math.floor(Math.random() * 1_000));
-    const adSlot = deriveAdSlot(seller, slotId, program.programId);
-    const existingSlot = await provider.connection.getAccountInfo(
-      adSlot,
+    const auction = deriveAuction(supplier, listingId, program.programId);
+    const vault = deriveVault(auction, program.programId);
+    const existingAuction = await provider.connection.getAccountInfo(
+      auction,
       "confirmed",
     );
-    if (existingSlot) {
+    if (existingAuction) {
       throw new Error(
-        `Slot ${slotId.toString()} already exists; run the example again for a fresh ID.`,
+        `Listing ${listingId.toString()} already exists; run the example again for a fresh ID.`,
       );
     }
 
-    const priceLamports = new anchor.BN(100_000_000);
-    const contentUri = `https://example.com/campaign/devnet-${slotId.toString()}`;
+    const kybId = 1_234_567;
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const currentBlockTime =
+      await provider.connection.getBlockTime(currentSlot);
+    if (currentBlockTime === null) {
+      throw new Error(
+        `No block time is available for Devnet slot ${currentSlot}.`,
+      );
+    }
+    const initialAuctionEndTs = new anchor.BN(currentBlockTime + 86_400);
+    const cycleDuration = new anchor.BN(30 * 86_400);
     const signature = await program.methods
-      .createSlot(slotId, priceLamports, contentUri)
+      .createListing(listingId, kybId, initialAuctionEndTs, cycleDuration)
       .accountsPartial({
-        seller,
-        adSlot,
+        supplier,
+        auction,
+        vault,
         systemProgram: SystemProgram.programId,
       })
       .rpc();
 
-    const createdSlot = await program.account.adSlot.fetch(adSlot, "confirmed");
-    assert.equal(createdSlot.seller.toBase58(), seller.toBase58());
-    assert.equal(createdSlot.slotId.toString(), slotId.toString());
+    const createdAuction = await program.account.auction.fetch(
+      auction,
+      "confirmed",
+    );
+    assert.equal(createdAuction.supplier.toBase58(), supplier.toBase58());
+    assert.equal(createdAuction.listingId.toString(), listingId.toString());
+    assert.equal(createdAuction.kybId, kybId);
+    assert.equal(createdAuction.cycleNumber.toNumber(), 0);
+    assert.equal(
+      createdAuction.cycleStartTs.toString(),
+      initialAuctionEndTs.toString(),
+    );
+    assert.equal(
+      createdAuction.cycleDuration.toNumber(),
+      cycleDuration.toNumber(),
+    );
 
     console.log(
       JSON.stringify(
@@ -69,9 +93,13 @@ describe("create_slot on Devnet", () => {
           programId: program.programId.toBase58(),
           signature,
           explorerUrl: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
-          adSlot: adSlot.toBase58(),
-          slotId: slotId.toString(),
-          priceLamports: priceLamports.toString(),
+          auction: auction.toBase58(),
+          vault: vault.toBase58(),
+          listingId: listingId.toString(),
+          initialAuctionEnd: new Date(
+            initialAuctionEndTs.toNumber() * 1_000,
+          ).toISOString(),
+          cycleDuration: cycleDuration.toString(),
         },
         null,
         2,
@@ -80,17 +108,27 @@ describe("create_slot on Devnet", () => {
   });
 });
 
-function deriveAdSlot(
-  seller: anchor.web3.PublicKey,
-  slotId: anchor.BN,
+function deriveAuction(
+  supplier: anchor.web3.PublicKey,
+  listingId: anchor.BN,
   programId: anchor.web3.PublicKey,
 ) {
   return anchor.web3.PublicKey.findProgramAddressSync(
     [
-      Buffer.from("ad_slot"),
-      seller.toBuffer(),
-      slotId.toArrayLike(Buffer, "le", 8),
+      Buffer.from("auction"),
+      supplier.toBuffer(),
+      listingId.toArrayLike(Buffer, "le", 8),
     ],
+    programId,
+  )[0];
+}
+
+function deriveVault(
+  auction: anchor.web3.PublicKey,
+  programId: anchor.web3.PublicKey,
+) {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), auction.toBuffer()],
     programId,
   )[0];
 }

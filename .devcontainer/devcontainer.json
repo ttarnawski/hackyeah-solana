@@ -1,0 +1,83 @@
+{
+  "name": "Ad Marketplace — Solana",
+
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "target": "toolchain",
+    "context": "..",
+  },
+
+  "remoteUser": "root",
+
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+  },
+
+  "forwardPorts": [8899, 8900, 3001, 5173],
+  "portsAttributes": {
+    "8899": { "label": "Surfpool RPC", "onAutoForward": "silent" },
+    "8900": { "label": "Surfpool WebSocket", "onAutoForward": "silent" },
+    "3001": { "label": "Marketplace API" },
+    "5173": { "label": "Marketplace frontend" },
+  },
+
+  "postCreateCommand": "pnpm install --frozen-lockfile",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Rust & Cargo
+        "rust-lang.rust-analyzer",
+        "tamasfe.even-better-toml",
+        "vadimcn.vscode-lldb",
+        "fill-labs.dependi",
+
+        // TypeScript & Web
+        "esbenp.prettier-vscode",
+        "dbaeumer.vscode-eslint",
+        "christian-kohler.path-intellisense",
+
+        // Infrastructure & Docker
+        "ms-azuretools.vscode-docker",
+        "redhat.vscode-yaml",
+
+        // System Monitoring & Quality of Life
+        "mutantdino.resourcemonitor",
+        "usernamehw.error-lens",
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        "streetsidesoftware.code-spell-checker",
+        "yzhang.markdown-all-in-one",
+      ],
+      "settings": {
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.procMacro.enable": true,
+        "terminal.integrated.defaultProfile.linux": "zsh",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "explicit",
+        },
+        "errorLens.enabled": true,
+        "resourcemonitor.cpu.enable": true,
+        "resourcemonitor.memory.enable": true,
+        "[typescript]": {
+          "editor.defaultFormatter": "esbenp.prettier-vscode",
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer",
+        },
+      },
+    },
+  },
+
+  "mounts": [
+    "source=ad-marketplace-cargo-registry,target=/root/.cargo/registry,type=volume",
+    "source=ad-marketplace-npm-cache,target=/root/.npm,type=volume",
+    "source=ad-marketplace-pnpm-store,target=/root/.local/share/pnpm/store,type=volume,volume-nocopy",
+    "source=ad-marketplace-root-node-modules,target=${containerWorkspaceFolder}/node_modules,type=volume,volume-nocopy",
+    "source=ad-marketplace-app-node-modules,target=${containerWorkspaceFolder}/app/node_modules,type=volume,volume-nocopy",
+    "source=ad-marketplace-backend-node-modules,target=${containerWorkspaceFolder}/backend/node_modules,type=volume,volume-nocopy",
+  ],
+}

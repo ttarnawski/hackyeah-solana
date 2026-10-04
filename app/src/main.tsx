@@ -1,3 +1,4 @@
+import "./polyfills";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -6,15 +7,13 @@ import {
 } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import App from "./App";
+import { solanaRpcUrl } from "./lib/solana";
 import "./styles.css";
 import "@solana/wallet-adapter-react-ui/styles.css";
 
-const rpcEndpoint =
-  import.meta.env.VITE_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
-
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <ConnectionProvider endpoint={rpcEndpoint}>
+    <ConnectionProvider endpoint={solanaRpcUrl}>
       <WalletProvider wallets={[]} autoConnect>
         <WalletModalProvider>
           <App />

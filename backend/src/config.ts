@@ -29,7 +29,7 @@ function parseOrigin(value: string | undefined): string {
 }
 
 function parseRpcUrl(value: string | undefined): string {
-  const rpcUrl = new URL(value ?? "https://api.devnet.solana.com");
+  const rpcUrl = new URL(value ?? "http://127.0.0.1:8899");
   if (rpcUrl.protocol !== "http:" && rpcUrl.protocol !== "https:") {
     throw new Error("SOLANA_RPC_URL must use HTTP or HTTPS");
   }
@@ -50,7 +50,7 @@ export function loadBackendConfig(
     host: env.HOST ?? "127.0.0.1",
     port: parsePort(env.PORT),
     frontendOrigin: parseOrigin(env.FRONTEND_ORIGIN),
-    solanaCluster: env.SOLANA_CLUSTER ?? "devnet",
+    solanaCluster: env.SOLANA_CLUSTER ?? "localnet",
     solanaRpcUrl: parseRpcUrl(env.SOLANA_RPC_URL),
     databasePath:
       databasePath === ":memory:" ? databasePath : resolve(databasePath),

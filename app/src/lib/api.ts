@@ -24,17 +24,15 @@ export interface WalletSession {
 export interface ListingDraftInput {
   title: string;
   description: string;
-  imageUrl: string;
   startingBidLamports: string;
   buyoutPriceLamports: string;
   minIncrementLamports: string;
   endsAt: string;
 }
 
-export interface ListingDraft extends Omit<ListingDraftInput, "imageUrl"> {
+export interface ListingDraft extends ListingDraftInput {
   id: string;
   ownerWallet: string;
-  imageUrl: string | null;
   createdAt: string;
 }
 

@@ -1,13 +1,19 @@
 use anchor_lang::prelude::*;
 
 #[error_code]
-pub enum MarketplaceError {
-    #[msg("The listing price must be greater than zero")]
-    InvalidPrice,
-    #[msg("The content URI must contain between 1 and 200 bytes")]
-    InvalidContentUri,
-    #[msg("The advertising slot is not available")]
-    SlotNotAvailable,
-    #[msg("The buyer and seller must be different")]
-    SelfPurchase,
+pub enum CustomError {
+    #[msg("Supplier is not KYB verified.")]
+    KybNotVerified,
+    #[msg("KYB ID must be a 7-digit integer (1000000 - 9999999).")]
+    InvalidKybId,
+    #[msg("Bid must be strictly higher than current top bid.")]
+    BidTooLow,
+    #[msg("Ad URL exceeds 128 bytes limit.")]
+    UrlTooLong,
+    #[msg("Passed account does not match on-chain previous winner.")]
+    InvalidPreviousWinner,
+    #[msg("No settled funds available for withdrawal.")]
+    NoFundsToClaim,
+    #[msg("Initial auction end must be in the future.")]
+    InitialAuctionEndMustBeFuture,
 }

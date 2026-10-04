@@ -11,8 +11,9 @@ listing drafts and the future chain indexer read model.
 - Listing drafts store presentation metadata and proposed auction terms.
   Lamport values are persisted as decimal strings to preserve u64 precision.
 - Active listings and bid history return explicit not-configured responses
-  until the auction instructions and indexer are available. There is no bid,
-  buyout, or cancellation write endpoint.
+  until the Anchor program is deployed and an indexer is configured. The
+  backend has no bid, buyout, settlement, refund, or cancellation write
+  endpoint.
 - The future indexer tables are projections only. They cannot accept bids or
   select a winner.
 

@@ -43,7 +43,7 @@ describe("marketplace backend", () => {
       payload: {
         title: "Homepage placement",
         description: "A draft ad placement.",
-        imageUrl: "",
+        imageUrl: "https://example.com/supplier-image.png",
         startingBidLamports: "100000000",
         buyoutPriceLamports: "1000000000",
         minIncrementLamports: "50000000",
@@ -57,6 +57,7 @@ describe("marketplace backend", () => {
       startingBidLamports: "100000000",
       buyoutPriceLamports: "1000000000",
     });
+    expect(response.json().item).not.toHaveProperty("imageUrl");
 
     const drafts = await app.inject({
       method: "GET",
@@ -117,7 +118,6 @@ describe("marketplace backend", () => {
       payload: {
         title: "Bad auction",
         description: "",
-        imageUrl: "",
         startingBidLamports: "1000000000",
         buyoutPriceLamports: "100000000",
         minIncrementLamports: "1",

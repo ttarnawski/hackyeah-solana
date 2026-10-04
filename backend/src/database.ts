@@ -12,7 +12,6 @@ export interface AuthNonce {
 export interface ListingDraftInput {
   title: string;
   description: string;
-  imageUrl: string | null;
   startingBidLamports: string;
   buyoutPriceLamports: string;
   minIncrementLamports: string;
@@ -30,7 +29,6 @@ interface ListingDraftRow {
   owner_wallet: string;
   title: string;
   description: string;
-  image_url: string | null;
   starting_bid_lamports: string;
   buyout_price_lamports: string;
   min_increment_lamports: string;
@@ -62,7 +60,6 @@ const schema = `
     owner_wallet TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
-    image_url TEXT,
     starting_bid_lamports TEXT NOT NULL,
     buyout_price_lamports TEXT NOT NULL,
     min_increment_lamports TEXT NOT NULL,
@@ -103,7 +100,6 @@ function mapListingDraft(row: ListingDraftRow): ListingDraft {
     ownerWallet: row.owner_wallet,
     title: row.title,
     description: row.description,
-    imageUrl: row.image_url,
     startingBidLamports: row.starting_bid_lamports,
     buyoutPriceLamports: row.buyout_price_lamports,
     minIncrementLamports: row.min_increment_lamports,
@@ -214,7 +210,6 @@ export class MarketplaceDatabase {
           owner_wallet,
           title,
           description,
-          image_url,
           starting_bid_lamports,
           buyout_price_lamports,
           min_increment_lamports,
@@ -225,7 +220,6 @@ export class MarketplaceDatabase {
           @ownerWallet,
           @title,
           @description,
-          @imageUrl,
           @startingBidLamports,
           @buyoutPriceLamports,
           @minIncrementLamports,
@@ -251,7 +245,6 @@ export class MarketplaceDatabase {
           owner_wallet,
           title,
           description,
-          image_url,
           starting_bid_lamports,
           buyout_price_lamports,
           min_increment_lamports,

@@ -4,14 +4,15 @@ import { useWallet } from "@solana/wallet-adapter-react";
 import { ApiError, api, type ListingDraft } from "./lib/api";
 import { authenticateWallet } from "./lib/auth";
 import { lamportsToSol, solToLamports } from "./lib/amounts";
+import { toLocalDateTimeInput } from "./lib/datetime";
 import { readSolanaRpcStatus, solanaCluster } from "./lib/solana";
+import { OnChainAuctions } from "./components/OnChainAuctions";
 
 type Page = "marketplace" | "create" | "bids";
 
 interface DraftFormValues {
   title: string;
   description: string;
-  imageUrl: string;
   startingBidSol: string;
   buyoutPriceSol: string;
   minIncrementSol: string;
@@ -21,18 +22,11 @@ interface DraftFormValues {
 const defaultFormValues: DraftFormValues = {
   title: "",
   description: "",
-  imageUrl: "",
   startingBidSol: "0.1",
   buyoutPriceSol: "1",
   minIncrementSol: "0.05",
-  endsAt: toLocalDateTime(new Date(Date.now() + 24 * 60 * 60 * 1000)),
+  endsAt: toLocalDateTimeInput(new Date(Date.now() + 24 * 60 * 60 * 1000)),
 };
-
-function toLocalDateTime(date: Date): string {
-  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
-    .toISOString()
-    .slice(0, 16);
-}
 
 function shortAddress(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
@@ -51,10 +45,6 @@ export default function App() {
   const [page, setPage] = useState<Page>("marketplace");
   const [sessionWallet, setSessionWallet] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<ListingDraft[]>([]);
-  const [marketplaceReady, setMarketplaceReady] = useState(false);
-  const [marketplaceStatusError, setMarketplaceStatusError] = useState<
-    string | null
-  >(null);
   const [rpcState, setRpcState] = useState<
     | { kind: "loading" }
     | {
@@ -69,9 +59,6 @@ export default function App() {
   const [draftsBusy, setDraftsBusy] = useState(false);
   const [draftsError, setDraftsError] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
-  const [bidHistoryMessage, setBidHistoryMessage] = useState<string | null>(
-    null,
-  );
 
   const refreshRpc = useCallback(async () => {
     setRpcState({ kind: "loading" });
@@ -94,20 +81,6 @@ export default function App() {
 
   useEffect(() => {
     void refreshRpc();
-    api
-      .getMarketplaceStatus()
-      .then((status) => {
-        setMarketplaceReady(status.auctionProgramConfigured);
-        setMarketplaceStatusError(null);
-      })
-      .catch((error: unknown) => {
-        setMarketplaceReady(false);
-        setMarketplaceStatusError(
-          error instanceof Error
-            ? error.message
-            : "Unable to load marketplace status.",
-        );
-      });
   }, [refreshRpc]);
 
   useEffect(() => {
@@ -173,27 +146,6 @@ export default function App() {
     };
   }, [walletAddress, sessionWallet]);
 
-  useEffect(() => {
-    let active = true;
-    if (page !== "bids" || !walletAddress || sessionWallet !== walletAddress) {
-      setBidHistoryMessage(null);
-      return;
-    }
-
-    api.getMyBids().catch((error: unknown) => {
-      if (!active) return;
-      setBidHistoryMessage(
-        error instanceof ApiError
-          ? error.message
-          : "Could not load bid history.",
-      );
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [page, walletAddress, sessionWallet]);
-
   const signIn = useCallback(async () => {
     if (!walletAddress) {
       setWalletError("Connect a wallet before signing in.");
@@ -243,13 +195,12 @@ export default function App() {
 
       const endsAt = new Date(values.endsAt);
       if (!Number.isFinite(endsAt.getTime())) {
-        throw new Error("Choose a valid auction end time.");
+        throw new Error("Choose a valid proposed end time for the draft.");
       }
 
       const result = await api.createListingDraft({
         title: values.title,
         description: values.description,
-        imageUrl: values.imageUrl.trim(),
         startingBidLamports: solToLamports(values.startingBidSol),
         buyoutPriceLamports: solToLamports(values.buyoutPriceSol),
         minIncrementLamports: solToLamports(values.minIncrementSol),
@@ -328,9 +279,9 @@ export default function App() {
           <p className="eyebrow">A transparent marketplace for attention</p>
           <h1>Ad space, bid on in the open.</h1>
           <p className="hero-description">
-            Listings and bid outcomes belong on Solana. This starter currently
-            saves private listing drafts; live auctions wait for the auction
-            instructions to be deployed.
+            Recurring ad-space listings and escrowed bids are read directly from
+            the configured Localnet program. Draft metadata remains off-chain
+            and separate from active listings.
           </p>
           <div className="hero-actions">
             <button
@@ -351,23 +302,24 @@ export default function App() {
           <div className="hero-card-top">
             <span className="live-indicator" />
             <span>ON-CHAIN AUCTIONS</span>
-            <span className="not-ready">NOT DEPLOYED</span>
+            <span className="not-ready">LOCALNET ONLY</span>
           </div>
-          <div className="hero-price">Starting bid</div>
+          <div className="hero-price">Default cycle</div>
           <div className="hero-value">
-            — <span>SOL</span>
+            30 <span>days</span>
           </div>
           <div className="hero-card-rule" />
           <div className="hero-card-row">
             <span>Escrowed bids</span>
-            <strong>Program required</strong>
+            <strong>Immediate refunds</strong>
           </div>
           <div className="hero-card-row">
             <span>Buyout</span>
-            <strong>Program required</strong>
+            <strong>Not implemented</strong>
           </div>
           <div className="hero-card-note">
-            No simulated bids or success states are shown.
+            Transactions require a connected wallet and a deployed Localnet
+            program.
           </div>
         </div>
       </section>
@@ -377,12 +329,6 @@ export default function App() {
           {walletError}
         </div>
       )}
-      {marketplaceStatusError && (
-        <div className="notice error-notice" role="alert">
-          Marketplace service status is unavailable: {marketplaceStatusError}
-        </div>
-      )}
-
       {walletAddress && (
         <section className="wallet-panel">
           <div>
@@ -409,159 +355,99 @@ export default function App() {
       )}
 
       {page === "marketplace" && (
-        <section className="content-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Explore</p>
-              <h2>Available ad slots</h2>
-            </div>
-            <span className="status-pill">
-              {marketplaceReady
-                ? "Auction program connected"
-                : "Auction program not configured"}
-            </span>
-          </div>
-          <div className="empty-state">
-            <div className="empty-icon">↗</div>
-            <h3>No on-chain auctions are available yet</h3>
-            <p>
-              The current Rust program does not implement escrowed bidding or
-              buyout auctions. A saved draft is not an active listing and cannot
-              receive bids.
-            </p>
-            <button
-              className="primary-button"
-              onClick={() => setPage("create")}
-            >
-              Prepare a listing draft
-            </button>
-          </div>
-        </section>
+        <OnChainAuctions
+          onNavigateToCreate={() => setPage("create")}
+          view="marketplace"
+        />
       )}
 
       {page === "create" && (
-        <section className="content-section create-grid">
-          <div>
-            <div className="section-heading compact-heading">
-              <div>
-                <p className="eyebrow">Seller workspace</p>
-                <h2>Prepare an ad listing</h2>
+        <>
+          <OnChainAuctions
+            onNavigateToCreate={() => setPage("create")}
+            view="create"
+          />
+          <section className="content-section create-grid">
+            <div>
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Seller workspace</p>
+                  <h2>Prepare an ad listing</h2>
+                </div>
               </div>
-            </div>
-            <p className="section-copy">
-              Save descriptive information and proposed auction terms. This
-              creates a backend draft only; the terms do not become enforceable
-              until an on-chain auction instruction creates the listing.
-            </p>
-            <ListingDraftForm
-              busy={draftsBusy}
-              walletReady={
-                sessionWallet === walletAddress && walletAddress !== null
-              }
-              onSave={saveDraft}
-            />
-            {draftsError && (
-              <div className="notice error-notice" role="alert">
-                {draftsError}
-              </div>
-            )}
-          </div>
-          <aside className="drafts-panel">
-            <div className="section-heading compact-heading">
-              <div>
-                <p className="eyebrow">Stored off-chain</p>
-                <h2>Your drafts</h2>
-              </div>
-            </div>
-            {!walletAddress && (
-              <p className="muted-copy">Connect a wallet to see your drafts.</p>
-            )}
-            {walletAddress && sessionWallet !== walletAddress && (
-              <p className="muted-copy">
-                Sign in with this wallet to load or save drafts.
+              <p className="section-copy">
+                Drafts are private backend metadata. To show an auction to other
+                wallets on this Localnet, create it in the Localnet panel above.
+                That on-chain listing does not include this draft&apos;s title,
+                description, or draft-only pricing and end date. The current
+                winning bidder supplies the ad image URL with their bid.
               </p>
-            )}
-            {draftsBusy && <p className="muted-copy">Loading drafts…</p>}
-            {sessionWallet === walletAddress &&
-              !draftsBusy &&
-              drafts.length === 0 && (
-                <p className="muted-copy">No drafts saved for this wallet.</p>
+              <ListingDraftForm
+                busy={draftsBusy}
+                walletReady={
+                  sessionWallet === walletAddress && walletAddress !== null
+                }
+                onSave={saveDraft}
+              />
+              {draftsError && (
+                <div className="notice error-notice" role="alert">
+                  {draftsError}
+                </div>
               )}
-            <div className="draft-list">
-              {drafts.map((draft) => (
-                <article className="draft-card" key={draft.id}>
-                  <div className="draft-card-heading">
-                    <strong>{draft.title}</strong>
-                    <span className="draft-badge">DRAFT</span>
-                  </div>
-                  <p>{draft.description || "No description added."}</p>
-                  <div className="draft-terms">
-                    <span>
-                      Start {lamportsToSol(draft.startingBidLamports)} SOL
-                    </span>
-                    <span>
-                      Buyout {lamportsToSol(draft.buyoutPriceLamports)} SOL
-                    </span>
-                  </div>
-                  <small>Ends {formatDate(draft.endsAt)}</small>
-                </article>
-              ))}
             </div>
-          </aside>
-        </section>
+            <aside className="drafts-panel">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="eyebrow">Stored off-chain</p>
+                  <h2>Your drafts</h2>
+                </div>
+              </div>
+              {!walletAddress && (
+                <p className="muted-copy">
+                  Connect a wallet to see your drafts.
+                </p>
+              )}
+              {walletAddress && sessionWallet !== walletAddress && (
+                <p className="muted-copy">
+                  Sign in with this wallet to load or save drafts.
+                </p>
+              )}
+              {draftsBusy && <p className="muted-copy">Loading drafts…</p>}
+              {sessionWallet === walletAddress &&
+                !draftsBusy &&
+                drafts.length === 0 && (
+                  <p className="muted-copy">No drafts saved for this wallet.</p>
+                )}
+              <div className="draft-list">
+                {drafts.map((draft) => (
+                  <article className="draft-card" key={draft.id}>
+                    <div className="draft-card-heading">
+                      <strong>{draft.title}</strong>
+                      <span className="draft-badge">DRAFT</span>
+                    </div>
+                    <p>{draft.description || "No description added."}</p>
+                    <div className="draft-terms">
+                      <span>
+                        Start {lamportsToSol(draft.startingBidLamports)} SOL
+                      </span>
+                      <span>
+                        Buyout {lamportsToSol(draft.buyoutPriceLamports)} SOL
+                      </span>
+                    </div>
+                    <small>Ends {formatDate(draft.endsAt)}</small>
+                  </article>
+                ))}
+              </div>
+            </aside>
+          </section>
+        </>
       )}
 
       {page === "bids" && (
-        <section className="content-section">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Your activity</p>
-              <h2>My bids</h2>
-            </div>
-            <span className="status-pill">Read from Solana when available</span>
-          </div>
-          {!walletAddress && (
-            <div className="empty-state small-empty">
-              <h3>Connect your wallet to view bid activity</h3>
-              <p>Your address is the identity used to look up public bids.</p>
-            </div>
-          )}
-          {walletAddress && sessionWallet !== walletAddress && (
-            <div className="empty-state small-empty">
-              <h3>Verify this wallet with the backend</h3>
-              <p>
-                Sign a one-time message to load your saved metadata and future
-                indexed bid history. This message does not authorize a
-                transaction.
-              </p>
-              <button
-                className="primary-button"
-                disabled={authBusy || !signMessage}
-                onClick={() => void signIn()}
-              >
-                {authBusy ? "Waiting for wallet…" : "Sign in with wallet"}
-              </button>
-            </div>
-          )}
-          {walletAddress && sessionWallet === walletAddress && (
-            <div className="empty-state small-empty">
-              <h3>
-                {bidHistoryMessage
-                  ? "On-chain bid history is not available yet"
-                  : "Checking bid history…"}
-              </h3>
-              <p>
-                {bidHistoryMessage ??
-                  "The app will verify bid receipts and outcomes against the auction program."}
-              </p>
-              <p className="muted-copy">
-                A confirmed bid transaction is not necessarily a winning bid.
-                “Won” will only appear after Solana confirms the auction
-                outcome.
-              </p>
-            </div>
-          )}
-        </section>
+        <OnChainAuctions
+          onNavigateToCreate={() => setPage("create")}
+          view="bids"
+        />
       )}
 
       <footer className="footer">
@@ -569,8 +455,7 @@ export default function App() {
           Non-custodial · SOL terms in lamports · Cluster: {solanaCluster}
         </span>
         <span>
-          Cancellation is not offered by this app. Auction actions are disabled
-          until the on-chain program is ready.
+          Localnet only · No buyout or cancellation instruction is available.
         </span>
       </footer>
     </main>
@@ -642,15 +527,6 @@ function ListingDraftForm({
           value={values.description}
         />
       </label>
-      <label>
-        Image URL <span className="optional-label">optional</span>
-        <input
-          onChange={(event) => update("imageUrl", event.target.value)}
-          placeholder="https://…"
-          type="url"
-          value={values.imageUrl}
-        />
-      </label>
       <div className="form-row">
         <label>
           Starting bid <span className="input-unit">SOL</span>
@@ -662,7 +538,7 @@ function ListingDraftForm({
           />
         </label>
         <label>
-          Buyout price <span className="input-unit">SOL</span>
+          Proposed buyout (draft only) <span className="input-unit">SOL</span>
           <input
             inputMode="decimal"
             onChange={(event) => update("buyoutPriceSol", event.target.value)}
@@ -682,7 +558,7 @@ function ListingDraftForm({
           />
         </label>
         <label>
-          Auction end
+          Proposed auction end (draft only)
           <input
             min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
             onChange={(event) => update("endsAt", event.target.value)}
@@ -716,8 +592,8 @@ function ListingDraftForm({
         {busy ? "Saving draft…" : "Save draft"}
       </button>
       <p className="form-hint">
-        Solana enforces bids and buyouts. This form only saves off-chain draft
-        details; it cannot create an auction yet.
+        This form stores off-chain draft details only. Buyouts are not
+        implemented; use the Localnet panel above to create an on-chain listing.
       </p>
     </form>
   );

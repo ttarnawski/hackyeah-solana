@@ -64,12 +64,6 @@ const draftSchema = z
   .object({
     title: z.string().trim().min(3).max(100),
     description: z.string().trim().max(3000),
-    imageUrl: z
-      .union([z.string().url().max(2048), z.literal("")])
-      .transform((value) => value || null)
-      .refine((value) => value === null || /^https?:/.test(value), {
-        message: "Image URL must use HTTPS or HTTP",
-      }),
     startingBidLamports: lamportsSchema,
     buyoutPriceLamports: lamportsSchema,
     minIncrementLamports: lamportsSchema,
