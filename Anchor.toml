@@ -6,7 +6,7 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-ad_marketplace = "J3ejrxcdwFzS1MsYcPtA1XVvbssEuLhLSiu1zXf6YtJu"
+ad_marketplace = "5dKLaVXqzR6Ja4GpkfseLCuPGDdnUFZ4cs6YkUSzMTdF"
 
 [programs.localnet]
 ad_marketplace = "5dKLaVXqzR6Ja4GpkfseLCuPGDdnUFZ4cs6YkUSzMTdF"

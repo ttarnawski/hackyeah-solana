@@ -8,8 +8,11 @@
     "build:backend": "pnpm --filter @ad-marketplace/backend build",
     "anchor:build:localnet": "anchor build && pnpm sync:anchor-idl",
     "anchor:deploy:localnet": "anchor program deploy --provider.cluster localnet --commitment processed -- --use-rpc --commitment processed",
+    "anchor:build:devnet": "anchor build && pnpm sync:anchor-idl",
+    "anchor:deploy:devnet": "anchor program deploy --provider.cluster devnet --commitment confirmed -- --use-rpc --commitment confirmed",
     "sync:anchor-idl": "node scripts/sync-anchor-idl.mjs",
     "test:backend": "pnpm --filter @ad-marketplace/backend test",
+    "test:devnet": "pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 scripts/create-slot-devnet.ts",
     "test": "pnpm exec ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\"",
     "lint": "prettier \"{tests,app,backend}/**/*.{ts,tsx,js,jsx,json,css,html,md,yaml,yml}\" README.md package.json pnpm-workspace.yaml --ignore-path .gitignore --check",
     "lint:fix": "prettier \"{tests,app,backend}/**/*.{ts,tsx,js,jsx,json,css,html,md,yaml,yml}\" README.md package.json pnpm-workspace.yaml --ignore-path .gitignore --write"

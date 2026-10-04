@@ -6,13 +6,13 @@ frontend and backend scaffold for a Solana ad-marketplace demo.
 ## Repository layout
 
 - `programs/ad_marketplace/` — Anchor program with KYB-gated recurring listings,
-  escrowed SOL bids, immediate outbid refunds, and supplier claims.
+  escrowed SOL bids, immediate outbid refunds, and supplier payouts.
 - `app/` — React/Vite client with Wallet Adapter connection and Solana Kit RPC
-  status checks.
+  status checks; supports Localnet and Devnet.
 - `backend/` — Fastify health and Localnet RPC status API. It removes legacy
   draft and wallet-session tables at startup; it does not store new drafts.
 - `tests/` — Anchor integration tests covering KYB verification, bidding,
-  cycle rollover, outbid refunds, buyout closure, and supplier claims.
+  metadata edits, cycle rollover payouts, outbid refunds, and buyout closure.
 - `backend/tests/` and `app/src/lib/` — backend and frontend unit tests.
 
 ## Current scope and trust boundary
@@ -24,22 +24,24 @@ separate `vault` PDA, not in the auction account. A higher bid immediately
 refunds the displaced leader in the same transaction.
 
 Each listing begins in an initial bidding period that closes at the
-supplier-chosen timestamp. The initial highest bid becomes
-`supplier_claimable` when a later `place_bid` or `claim_funds` instruction
-observes that deadline; recurring cycle 1 then starts at that timestamp.
-Recurring cycles advance lazily on a later bid or claim. At each cycle end, the
-leading bid becomes claimable and the next cycle begins. Only the supplier can
-withdraw settled funds with `claim_funds`; bids remain escrowed until
-settlement. New listings default to 30-day cycles, and the supplier can set a
-shorter duration for testing.
+supplier-chosen timestamp. The first cycle is settled lazily by a later
+`place_bid` or `claim_funds` instruction. A rollover bid pays the completed
+cycle's proceeds to the supplier in that same transaction. If no bid triggers
+rollover, any connected wallet can call `claim_funds` to settle and pay the
+supplier; that caller pays the transaction fee. The program cannot run itself
+at a deadline, so there is no payout until a transaction invokes it. New
+listings default to 30-day cycles, and the supplier can set a shorter duration
+for testing.
 
 Listing names, descriptions, buyout prices, and terminal status are stored
 publicly in a separate `ListingMetadata` PDA, preserving the existing
-256-byte `Auction` account layout. A supplier can initialize this metadata for
-an older listing after upgrading the program. A bid at or above the configured
-buyout price refunds the previous leader, accepts the bidder, refunds any
-overage in the same transaction, makes exactly the buyout price claimable, and
-permanently closes that listing and its future cycles. A zero buyout price
+256-byte `Auction` account layout. The supplier can update the public title and
+description after creation, and initialize metadata for an older listing
+after upgrading the program. A bid at or above the configured buyout price
+refunds the previous leader, accepts the bidder, refunds any overage in the
+same transaction, records exactly the buyout price for the supplier, and
+permanently closes that listing and its future cycles. Any connected wallet
+can trigger the resulting payout with `claim_funds`. A zero buyout price
 disables buyout. There is no cancellation instruction.
 
 The backend never accepts a bid, holds keys or SOL, settles an auction, or
@@ -51,18 +53,20 @@ metadata is public; no off-chain draft feature remains. On startup the backend
 drops legacy SQLite draft and wallet-session tables from the configured
 database path.
 
-The app integration is Localnet-only and reads the generated Anchor IDL from
-`app/public/idl/ad_marketplace.json`. Each listing stores its supplier, listing
-ID, KYB reference, cycle configuration, and bidder-provided ad image URL; its
-public metadata account stores the name, description, buyout price, and
-permanent closure state.
+The app defaults to Localnet and reads the generated Anchor IDL from
+`app/public/idl/ad_marketplace.json`. Devnet is supported after deploying the
+program; its RPC endpoint is checked against Devnet's genesis hash before
+program state is read or a transaction is submitted. Each listing stores its
+supplier, listing ID, KYB reference, cycle configuration, and bidder-provided
+ad image URL; its public metadata account stores the name, description, buyout
+price, and permanent closure state.
 
 ## Actors and operations
 
 | Actor             | Operations                                                                            | Requirements and effects                                                                                                                                                                                       |
 | ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Visitor           | Browse the marketplace and refresh listings                                           | Public account reads do not require a connected wallet or transaction fee. Listings are visible to users connected to the same Solana cluster, including listings that are not yet KYB-verified.               |
-| Supplier          | Create a listing, provide listing metadata, and claim settled proceeds                | Signs with the wallet stored as the listing supplier; pays transaction fees and account rent. The supplier supplies a public seven-digit KYB reference, but the program does not verify the business identity. |
+| Visitor           | Browse listings; optionally trigger a due supplier payout                             | Public reads need no wallet. A connected wallet can submit a permissionless payout transaction and pays its network fee; listings are visible to users on the same cluster.                                    |
+| Supplier          | Create and edit a listing, receive settled proceeds                                   | Signs with the wallet stored as the listing supplier; pays transaction fees and account rent. The supplier supplies a public seven-digit KYB reference, but the program does not verify the business identity. |
 | Marketplace admin | Initialize the marketplace once; verify or revoke a supplier's KYB status per listing | The first wallet to call `initialize_config` becomes the admin. KYB review happens off-chain; the admin submits the result on-chain. There is no admin-transfer instruction.                                   |
 | Bidder            | Place or raise a bid, attach an ad-image URL, or trigger a buyout                     | Signs each transaction and funds the bid from their wallet. An outbid bidder receives their bid principal immediately, but not the transaction fee they already paid.                                          |
 | Operator/deployer | Run Localnet, build and deploy the program, and fund demo wallets                     | The deployment upgrade authority is separate from the marketplace admin and does not automatically receive admin privileges.                                                                                   |
@@ -103,16 +107,18 @@ funds.
    the displaced leader immediately in the same transaction. The app's
    **My bids** view shows the connected wallet's current winning positions and
    listings it owns; it is not a historical bid ledger.
-6. **Settle cycles and claim proceeds.** The initial period ends at the
+6. **Settle cycles and pay proceeds.** The initial period ends at the
    supplier's configured close time; recurring cycles follow. Deadlines do
-   not run a background job or transfer funds automatically. A later
-   `place_bid` or `claim_funds` transaction lazily settles elapsed cycles and
-   makes their leading bids claimable by the supplier. The supplier signs
-   `claim_funds` to withdraw settled proceeds from the Vault.
+   not run a background job. A later bid settles the expired cycle and pays its
+   proceeds to the supplier in the same transaction. If no bid triggers
+   rollover, any connected wallet can choose **Settle and pay supplier**; that
+   transaction settles elapsed cycles and pays the supplier, with the caller
+   covering the network fee.
 7. **End a listing with buyout.** When enabled, a bid at or above the buyout
    price ends the listing and future cycles permanently. The displaced
    leader's bid and any amount above the buyout price are refunded atomically;
-   exactly the buyout price becomes claimable by the supplier.
+   exactly the buyout price is reserved for the supplier. Any connected wallet
+   can submit the payout transaction.
 
 For the full actor-by-actor walkthrough—including account reads, transaction
 flow, cycle edge cases, and the backend's role—see
@@ -135,10 +141,13 @@ pnpm --filter @ad-marketplace/app dev
 ```
 
 The app defaults to Localnet RPC at `http://127.0.0.1:8899` and the program ID
-declared for Localnet in `Anchor.toml`. Auction reads and writes are disabled
-for non-loopback RPC endpoints. The backend defaults to `http://localhost:3001`, and the Vite dev server
-proxies `/api` for health and RPC status checks. It does not persist listings
-or drafts.
+declared in `Anchor.toml`. Localnet reads and writes require a loopback RPC
+endpoint. To use Devnet, set `VITE_SOLANA_CLUSTER=devnet`,
+`VITE_SOLANA_RPC_URL=https://api.devnet.solana.com`, and the deployed program
+ID in `app/.env`; see [app/README.md](./app/README.md) for deployment and
+test-SOL steps. The backend defaults to `http://localhost:3001`, and the Vite
+dev server proxies `/api` for health and RPC status checks. It does not persist
+listings or drafts.
 
 ## Dev container
 
@@ -237,8 +246,9 @@ upgraded program.
 
 This Localnet is bound to the demo host's loopback address. Wallets on other
 computers will resolve `127.0.0.1` to their own computer, not this validator.
-For a remote demo, use a shared reachable cluster and update the app's
-Localnet-only RPC restriction deliberately.
+For a Devnet demo, deploy the program and follow the Devnet setup in
+[`app/README.md`](./app/README.md). The app validates that its configured RPC is
+actually Devnet before it reads or writes auction state.
 
 Keep Solana wallet and program keypairs out of source control. Do not run
 `solana-test-validator --reset` alongside the Surfpool Localnet.

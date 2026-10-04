@@ -52,18 +52,25 @@ if (missingInstructions.length > 0) {
 }
 
 const anchorToml = readFileSync(resolve(repositoryRoot, "Anchor.toml"), "utf8");
-const localnetProgramId = anchorToml.match(
-  /^\[programs\.localnet\][\s\S]*?^\s*ad_marketplace\s*=\s*"([^"]+)"/m,
-)?.[1];
-if (!localnetProgramId) {
-  throw new Error("Could not find ad_marketplace under [programs.localnet].");
-}
-if (idl.address !== localnetProgramId) {
-  throw new Error(
-    `IDL address ${idl.address} does not match Anchor.toml Localnet address ${localnetProgramId}.`,
-  );
+for (const cluster of ["localnet", "devnet"]) {
+  const programId = anchorToml.match(
+    new RegExp(
+      `^\\[programs\\.${cluster}\\][\\s\\S]*?^\\s*ad_marketplace\\s*=\\s*"([^"]+)"`,
+      "m",
+    ),
+  )?.[1];
+  if (!programId) {
+    throw new Error(
+      `Could not find ad_marketplace under [programs.${cluster}].`,
+    );
+  }
+  if (idl.address !== programId) {
+    throw new Error(
+      `IDL address ${idl.address} does not match Anchor.toml ${cluster} address ${programId}.`,
+    );
+  }
 }
 
 mkdirSync(dirname(destination), { recursive: true });
 copyFileSync(source, destination);
-console.log(`Synced ${source} to ${destination} for Localnet.`);
+console.log(`Synced ${source} to ${destination} for Localnet and Devnet.`);

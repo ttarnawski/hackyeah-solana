@@ -13,15 +13,17 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { lamportsToSol, solToLamports } from "../lib/amounts";
 import { toLocalDateTimeInput } from "../lib/datetime";
+import { solanaClusterName } from "../lib/solana";
 import {
-  claimSupplierFunds,
   createListingId,
   createOnChainListing,
   fetchAuctionSnapshot,
   initializeAdminConfig,
   initializeOnChainListingMetadata,
   placeOnChainBid,
+  settleAndPaySupplier,
   setSupplierKybVerified,
+  updateOnChainListingMetadata,
   type AuctionSnapshot,
   type OnChainAuction,
 } from "../lib/auction-program";
@@ -72,7 +74,10 @@ export function OnChainAuctions({
     } catch (error) {
       setSnapshotState({
         kind: "error",
-        message: errorMessage(error, "Could not load Localnet auctions."),
+        message: errorMessage(
+          error,
+          `Could not load ${solanaClusterName} auctions.`,
+        ),
       });
     }
   }, [connection]);
@@ -132,7 +137,7 @@ export function OnChainAuctions({
   const initializeConfig = () =>
     void runTransaction(
       "initialize-config",
-      "Localnet admin config initialized.",
+      `${solanaClusterName} admin config initialized.`,
       (wallet) => initializeAdminConfig(connection, wallet),
     );
 
@@ -164,6 +169,22 @@ export function OnChainAuctions({
       `Public details saved for listing ${auction.listingId}.`,
       (wallet) =>
         initializeOnChainListingMetadata(
+          connection,
+          wallet,
+          new PublicKey(auction.address),
+          input,
+        ),
+    );
+
+  const updateMetadata = (
+    auction: OnChainAuction,
+    input: { title: string; description: string },
+  ) =>
+    void runTransaction(
+      `update-metadata:${auction.address}`,
+      `Public details updated for listing ${auction.listingId}.`,
+      (wallet) =>
+        updateOnChainListingMetadata(
           connection,
           wallet,
           new PublicKey(auction.address),
@@ -206,9 +227,9 @@ export function OnChainAuctions({
 
   const claimFunds = (auction: OnChainAuction) =>
     void runTransaction(
-      `claim:${auction.address}`,
-      `Supplier funds claimed for listing ${auction.listingId}.`,
-      (wallet) => claimSupplierFunds(connection, wallet, auction),
+      `settle-payout:${auction.address}`,
+      `Settled proceeds paid to the supplier for listing ${auction.listingId}.`,
+      (wallet) => settleAndPaySupplier(connection, wallet, auction),
     );
 
   const sectionHeading =
@@ -223,14 +244,16 @@ export function OnChainAuctions({
       <div className="section-heading">
         <div>
           <p className="eyebrow">
-            {view === "bids" ? "Current state from Solana" : "Localnet program"}
+            {view === "bids"
+              ? "Current state from Solana"
+              : `${solanaClusterName} program`}
           </p>
           <h2>{sectionHeading}</h2>
         </div>
         <div className="section-actions">
           <span className="status-pill">
             {snapshotState.kind === "loading"
-              ? "Reading Localnet…"
+              ? `Reading ${solanaClusterName}…`
               : snapshotState.kind === "error"
                 ? "Program unavailable"
                 : `${snapshotState.snapshot.auctions.length} on-chain listing${snapshotState.snapshot.auctions.length === 1 ? "" : "s"}`}
@@ -261,18 +284,18 @@ export function OnChainAuctions({
 
       {snapshotState.kind === "loading" && (
         <div className="empty-state small-empty">
-          <h3>Checking the Localnet auction program</h3>
+          <h3>Checking the {solanaClusterName} auction program</h3>
           <p>Loading its generated IDL and current on-chain account state.</p>
         </div>
       )}
 
       {snapshotState.kind === "error" && (
         <div className="empty-state small-empty">
-          <h3>Localnet auctions are not ready</h3>
+          <h3>{solanaClusterName} auctions are not ready</h3>
           <p>{snapshotState.message}</p>
           <p className="muted-copy">
-            Check that the configured Localnet RPC is reachable and that the
-            deployed program and generated IDL are compatible.
+            Check that the configured {solanaClusterName} RPC is reachable and
+            that the deployed program and generated IDL are compatible.
           </p>
           <button
             className="secondary-button"
@@ -288,12 +311,14 @@ export function OnChainAuctions({
         <div className="on-chain-create">
           {snapshotState.snapshot.admin === null ? (
             <div className="notice warning-notice">
-              <strong>No admin config exists on this Localnet.</strong>
+              <strong>
+                No admin config exists on this {solanaClusterName}.
+              </strong>
               <p>
                 Choose a dedicated wallet you control. The first wallet to
                 initialize this config becomes the KYB admin, and this program
                 has no admin-transfer instruction. Check the connected wallet
-                above before approving; only do this on your Localnet.
+                and selected cluster before approving.
               </p>
               <button
                 className="primary-button"
@@ -303,7 +328,7 @@ export function OnChainAuctions({
               >
                 {pendingAction === "initialize-config"
                   ? "Waiting for wallet…"
-                  : "Initialize Localnet admin"}
+                  : `Initialize ${solanaClusterName} admin`}
               </button>
             </div>
           ) : (
@@ -348,6 +373,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -356,7 +382,7 @@ export function OnChainAuctions({
             <p className="muted-copy">
               {walletAddress
                 ? "This wallet has not created an on-chain listing yet."
-                : "Connect a wallet to create a Localnet listing."}
+                : `Connect a wallet to create a ${solanaClusterName} listing.`}
             </p>
           )}
         </div>
@@ -369,16 +395,16 @@ export function OnChainAuctions({
               <div className="empty-icon">↗</div>
               <h3>No on-chain auctions are available yet</h3>
               <p>
-                The program is connected to Localnet, but no listing accounts
-                have been created. Create a listing and have the admin verify
-                its supplier before it can receive bids.
+                The program is connected to {solanaClusterName}, but no listing
+                accounts have been created. Create a listing and have the admin
+                verify its supplier before it can receive bids.
               </p>
               <button
                 className="primary-button"
                 onClick={onNavigateToCreate}
                 type="button"
               >
-                Create a Localnet listing
+                Create a {solanaClusterName} listing
               </button>
             </div>
           ) : (
@@ -394,6 +420,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -409,7 +436,7 @@ export function OnChainAuctions({
               <h3>Connect a wallet to view your positions</h3>
               <p>
                 The app reads your current highest bids and supplier claimable
-                balances directly from Localnet.
+                balances directly from {solanaClusterName}.
               </p>
             </div>
           ) : visibleAuctions.length === 0 ? (
@@ -433,6 +460,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -659,6 +687,10 @@ interface AuctionCardProps {
     adUrl: string,
   ) => void;
   onSetVerified: (auction: OnChainAuction, isVerified: boolean) => void;
+  onUpdateMetadata: (
+    auction: OnChainAuction,
+    input: { title: string; description: string },
+  ) => void;
   walletAddress: string | null;
 }
 
@@ -671,6 +703,7 @@ function AuctionCard({
   onInitializeMetadata,
   onPlaceBid,
   onSetVerified,
+  onUpdateMetadata,
   walletAddress,
 }: AuctionCardProps) {
   const [amountSol, setAmountSol] = useState("");
@@ -679,6 +712,12 @@ function AuctionCard({
   const [metadataDescription, setMetadataDescription] = useState("");
   const [metadataBuyoutPriceSol, setMetadataBuyoutPriceSol] = useState("0");
   const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [editingMetadata, setEditingMetadata] = useState(false);
+  const [updatedTitle, setUpdatedTitle] = useState("");
+  const [updatedDescription, setUpdatedDescription] = useState("");
+  const [updateMetadataError, setUpdateMetadataError] = useState<string | null>(
+    null,
+  );
   const isAdmin = walletAddress !== null && walletAddress === adminAddress;
   const isSupplier =
     walletAddress !== null && walletAddress === auction.supplier;
@@ -729,6 +768,38 @@ function AuctionCard({
     }
   }
 
+  function openMetadataEditor() {
+    setUpdatedTitle(auction.title ?? "");
+    setUpdatedDescription(auction.description ?? "");
+    setUpdateMetadataError(null);
+    setEditingMetadata(true);
+  }
+
+  function submitMetadataUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setUpdateMetadataError(null);
+    if (updatedTitle.trim().length === 0) {
+      setUpdateMetadataError("Enter a listing title.");
+      return;
+    }
+    if (new TextEncoder().encode(updatedTitle).length > 100) {
+      setUpdateMetadataError(
+        "Listing title must be no more than 100 UTF-8 bytes.",
+      );
+      return;
+    }
+    if (new TextEncoder().encode(updatedDescription).length > 3_000) {
+      setUpdateMetadataError(
+        "Listing description must be no more than 3000 UTF-8 bytes.",
+      );
+      return;
+    }
+    onUpdateMetadata(auction, {
+      title: updatedTitle,
+      description: updatedDescription,
+    });
+  }
+
   return (
     <article className="listing-card auction-card">
       <div className="listing-card-heading">
@@ -751,6 +822,73 @@ function AuctionCard({
       </div>
       {auction.description && (
         <p className="auction-description">{auction.description}</p>
+      )}
+      {isSupplier && auction.metadataInitialized && (
+        <div className="auction-metadata-editor">
+          {editingMetadata ? (
+            <form
+              className="listing-form metadata-form"
+              onSubmit={submitMetadataUpdate}
+            >
+              <label>
+                Public listing name
+                <input
+                  maxLength={100}
+                  onChange={(event) => setUpdatedTitle(event.target.value)}
+                  required
+                  value={updatedTitle}
+                />
+              </label>
+              <label>
+                Public description
+                <textarea
+                  maxLength={3_000}
+                  onChange={(event) =>
+                    setUpdatedDescription(event.target.value)
+                  }
+                  required
+                  rows={3}
+                  value={updatedDescription}
+                />
+                <span className="input-unit">
+                  {new TextEncoder().encode(updatedDescription).length}/3000
+                  UTF-8 bytes
+                </span>
+              </label>
+              {updateMetadataError && (
+                <div className="notice error-notice" role="alert">
+                  {updateMetadataError}
+                </div>
+              )}
+              <div className="metadata-edit-actions">
+                <button
+                  className="primary-button"
+                  disabled={busy}
+                  type="submit"
+                >
+                  {busy ? "Waiting for wallet…" : "Save listing details"}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() => setEditingMetadata(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              className="secondary-button auction-metadata-edit-action"
+              disabled={busy}
+              onClick={openMetadataEditor}
+              type="button"
+            >
+              Edit listing details
+            </button>
+          )}
+        </div>
       )}
       <div className="listing-terms auction-terms">
         <span>Supplier {shortAddress(auction.supplier)}</span>
@@ -864,6 +1002,12 @@ function AuctionCard({
           {lamportsToSol(unsettledBidAmount.toString())} SOL
         </p>
       )}
+      {settlementDue && unsettledBidAmount > 0n && !auction.isClosed && (
+        <p className="form-hint">
+          The next successful bid will settle this cycle and pay its proceeds to
+          the supplier in the same transaction.
+        </p>
+      )}
 
       {isAdmin && (
         <button
@@ -942,17 +1086,24 @@ function AuctionCard({
         </form>
       )}
 
-      {isSupplier &&
+      {walletAddress &&
         auction.metadataInitialized &&
         claimableAfterSettlement > 0n && (
-          <button
-            className="secondary-button auction-claim-action"
-            disabled={busy}
-            onClick={() => onClaim(auction)}
-            type="button"
-          >
-            Claim {lamportsToSol(claimableAfterSettlement.toString())} SOL
-          </button>
+          <>
+            <p className="form-hint">
+              Any connected wallet can trigger this payout; the supplier
+              receives the SOL and the caller pays the transaction fee.
+            </p>
+            <button
+              className="secondary-button auction-claim-action"
+              disabled={busy}
+              onClick={() => onClaim(auction)}
+              type="button"
+            >
+              Settle and pay supplier{" "}
+              {lamportsToSol(claimableAfterSettlement.toString())} SOL
+            </button>
+          </>
         )}
     </article>
   );

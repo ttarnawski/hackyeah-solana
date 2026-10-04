@@ -7,16 +7,24 @@ import {
 } from "@anchor-lang/core";
 import type { AnchorWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, SystemProgram, type Connection } from "@solana/web3.js";
-import { solanaCluster, solanaRpcUrl } from "./solana";
+import {
+  assertSolanaGenesisHash,
+  assertSolanaRpcConfiguration,
+  solanaCluster,
+  solanaClusterName,
+  solanaRpcUrl,
+} from "./solana";
 
 export const LOCALNET_PROGRAM_ID =
   "5dKLaVXqzR6Ja4GpkfseLCuPGDdnUFZ4cs6YkUSzMTdF";
+export const DEVNET_PROGRAM_ID = LOCALNET_PROGRAM_ID;
 
 const IDL_PATH = `${import.meta.env.BASE_URL}idl/ad_marketplace.json`;
 const REQUIRED_INSTRUCTIONS = [
   "initialize_config",
   "create_listing",
   "initialize_listing_metadata",
+  "update_listing_metadata",
   "verify_supplier_kyb",
   "place_bid",
   "claim_funds",
@@ -161,6 +169,7 @@ export async function fetchAuctionSnapshot(
   connection: Connection,
 ): Promise<AuctionSnapshot> {
   const { idl, programId } = await loadProgramDefinition();
+  await assertConnectedCluster(connection);
   await requireDeployedProgram(connection, programId);
 
   const coder = new BorshAccountsCoder(idl);
@@ -377,6 +386,28 @@ export async function initializeOnChainListingMetadata(
     .rpc();
 }
 
+export async function updateOnChainListingMetadata(
+  connection: Connection,
+  wallet: AnchorWallet,
+  auctionAddress: PublicKey,
+  input: {
+    title: string;
+    description: string;
+  },
+): Promise<string> {
+  validateListingMetadata(input.title, input.description);
+  const { program, programId } = await getWalletProgram(connection, wallet);
+  return program.methods
+    .updateListingMetadata(input.title, input.description)
+    .accountsPartial({
+      auction: auctionAddress,
+      listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
+      supplier: wallet.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+}
+
 export async function setSupplierKybVerified(
   connection: Connection,
   wallet: AnchorWallet,
@@ -428,12 +459,13 @@ export async function placeOnChainBid(
       vault,
       bidder: wallet.publicKey,
       previousWinner,
+      supplier: new PublicKey(auction.supplier),
       systemProgram: SystemProgram.programId,
     })
     .rpc();
 }
 
-export async function claimSupplierFunds(
+export async function settleAndPaySupplier(
   connection: Connection,
   wallet: AnchorWallet,
   auction: OnChainAuction,
@@ -446,7 +478,8 @@ export async function claimSupplierFunds(
       auction: auctionAddress,
       listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
       vault: deriveVaultPda(auctionAddress, programId),
-      supplier: wallet.publicKey,
+      supplier: new PublicKey(auction.supplier),
+      caller: wallet.publicKey,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
@@ -471,6 +504,7 @@ async function getWalletProgram(
   wallet: AnchorWallet,
 ): Promise<{ program: Program<Idl>; programId: PublicKey }> {
   const { idl, programId } = await loadProgramDefinition();
+  await assertConnectedCluster(connection);
   await requireDeployedProgram(connection, programId);
 
   const provider = new AnchorProvider(connection, wallet, {
@@ -485,7 +519,7 @@ async function loadProgramDefinition(): Promise<{
   idl: Idl;
   programId: PublicKey;
 }> {
-  assertLocalnetConfiguration();
+  assertSolanaRpcConfiguration(solanaCluster, solanaRpcUrl);
   const programId = readProgramId();
   const response = await fetch(IDL_PATH, { cache: "no-store" });
   if (!response.ok) {
@@ -509,7 +543,7 @@ async function loadProgramDefinition(): Promise<{
   }
   if (rawIdl.address !== programId.toBase58()) {
     throw new AuctionProgramNotReadyError(
-      `IDL address ${rawIdl.address} does not match configured Localnet program ${programId.toBase58()}.`,
+      `IDL address ${rawIdl.address} does not match configured ${solanaClusterName} program ${programId.toBase58()}.`,
     );
   }
 
@@ -538,41 +572,27 @@ async function requireDeployedProgram(
   );
   if (!programAccount?.executable) {
     throw new AuctionProgramNotReadyError(
-      `Auction program ${programId.toBase58()} is not deployed to the configured Localnet validator.`,
+      `Auction program ${programId.toBase58()} is not deployed to the configured ${solanaClusterName} cluster.`,
     );
   }
 }
 
+async function assertConnectedCluster(connection: Connection): Promise<void> {
+  if (solanaCluster === "devnet") {
+    assertSolanaGenesisHash(solanaCluster, await connection.getGenesisHash());
+  }
+}
+
 function readProgramId(): PublicKey {
+  const defaultProgramId =
+    solanaCluster === "devnet" ? DEVNET_PROGRAM_ID : LOCALNET_PROGRAM_ID;
   const configured =
-    import.meta.env.VITE_AUCTION_PROGRAM_ID?.trim() || LOCALNET_PROGRAM_ID;
+    import.meta.env.VITE_AUCTION_PROGRAM_ID?.trim() || defaultProgramId;
   try {
     return new PublicKey(configured);
   } catch {
     throw new AuctionProgramNotReadyError(
       "VITE_AUCTION_PROGRAM_ID is not a valid Solana public key.",
-    );
-  }
-}
-
-function assertLocalnetConfiguration(): void {
-  if (solanaCluster !== "localnet") {
-    throw new AuctionProgramNotReadyError(
-      "On-chain auction actions are currently restricted to Localnet.",
-    );
-  }
-
-  let hostname: string;
-  try {
-    hostname = new URL(solanaRpcUrl).hostname;
-  } catch {
-    throw new AuctionProgramNotReadyError(
-      "VITE_SOLANA_RPC_URL must be a valid Localnet RPC URL.",
-    );
-  }
-  if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname)) {
-    throw new AuctionProgramNotReadyError(
-      "On-chain auction actions require a loopback Localnet RPC endpoint.",
     );
   }
 }

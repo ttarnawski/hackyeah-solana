@@ -50,6 +50,14 @@ pub mod ad_marketplace {
         instructions::handle_initialize_listing_metadata(ctx, title, description, buyout_price)
     }
 
+    pub fn update_listing_metadata(
+        ctx: Context<UpdateListingMetadata>,
+        title: String,
+        description: String,
+    ) -> Result<()> {
+        instructions::handle_update_listing_metadata(ctx, title, description)
+    }
+
     pub fn verify_supplier_kyb(ctx: Context<VerifySupplierKyb>, is_verified: bool) -> Result<()> {
         instructions::handle_verify_supplier_kyb(ctx, is_verified)
     }
