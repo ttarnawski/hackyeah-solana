@@ -7,8 +7,6 @@ export interface BackendConfig {
   solanaCluster: string;
   solanaRpcUrl: string;
   databasePath: string;
-  secureCookies: boolean;
-  sessionTtlSeconds: number;
   nodeEnv: string;
 }
 
@@ -39,11 +37,6 @@ function parseRpcUrl(value: string | undefined): string {
 export function loadBackendConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): BackendConfig {
-  const sessionTtlSeconds = Number(env.SESSION_TTL_SECONDS ?? "43200");
-  if (!Number.isInteger(sessionTtlSeconds) || sessionTtlSeconds < 300) {
-    throw new Error("SESSION_TTL_SECONDS must be an integer of at least 300");
-  }
-
   const databasePath = env.DATABASE_PATH ?? "./data/marketplace.sqlite";
 
   return {
@@ -54,8 +47,6 @@ export function loadBackendConfig(
     solanaRpcUrl: parseRpcUrl(env.SOLANA_RPC_URL),
     databasePath:
       databasePath === ":memory:" ? databasePath : resolve(databasePath),
-    secureCookies: env.NODE_ENV === "production",
-    sessionTtlSeconds,
     nodeEnv: env.NODE_ENV ?? "development",
   };
 }

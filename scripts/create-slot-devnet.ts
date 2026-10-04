@@ -2,7 +2,7 @@ import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { AdMarketplace } from "../target/types/ad_marketplace";
+import type { AdMarketplace } from "../target/types/ad_marketplace";
 
 const DEVNET_RPC = "https://api.devnet.solana.com";
 
@@ -59,11 +59,23 @@ describe("create_listing on Devnet", () => {
     }
     const initialAuctionEndTs = new anchor.BN(currentBlockTime + 86_400);
     const cycleDuration = new anchor.BN(30 * 86_400);
+    const title = "Devnet homepage placement";
+    const description = "Recurring advertising space on the homepage.";
+    const buyoutPrice = new anchor.BN(1_000_000_000);
     const signature = await program.methods
-      .createListing(listingId, kybId, initialAuctionEndTs, cycleDuration)
+      .createListing(
+        listingId,
+        kybId,
+        title,
+        description,
+        buyoutPrice,
+        initialAuctionEndTs,
+        cycleDuration,
+      )
       .accountsPartial({
         supplier,
         auction,
+        listingMetadata: deriveListingMetadata(auction, program.programId),
         vault,
         systemProgram: SystemProgram.programId,
       })
@@ -129,6 +141,16 @@ function deriveVault(
 ) {
   return anchor.web3.PublicKey.findProgramAddressSync(
     [Buffer.from("vault"), auction.toBuffer()],
+    programId,
+  )[0];
+}
+
+function deriveListingMetadata(
+  auction: anchor.web3.PublicKey,
+  programId: anchor.web3.PublicKey,
+) {
+  return anchor.web3.PublicKey.findProgramAddressSync(
+    [Buffer.from("listing_metadata"), auction.toBuffer()],
     programId,
   )[0];
 }

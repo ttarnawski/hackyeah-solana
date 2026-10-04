@@ -9,10 +9,10 @@ frontend and backend scaffold for a Solana ad-marketplace demo.
   escrowed SOL bids, immediate outbid refunds, and supplier claims.
 - `app/` — React/Vite client with Wallet Adapter connection and Solana Kit RPC
   status checks.
-- `backend/` — Fastify API with SQLite-backed wallet sessions and listing
-  drafts.
+- `backend/` — Fastify health and Localnet RPC status API. It removes legacy
+  draft and wallet-session tables at startup; it does not store new drafts.
 - `tests/` — Anchor integration tests covering KYB verification, bidding,
-  cycle rollover, outbid refunds, and supplier claims.
+  cycle rollover, outbid refunds, buyout closure, and supplier claims.
 - `backend/tests/` and `app/src/lib/` — backend and frontend unit tests.
 
 ## Current scope and trust boundary
@@ -30,34 +30,93 @@ observes that deadline; recurring cycle 1 then starts at that timestamp.
 Recurring cycles advance lazily on a later bid or claim. At each cycle end, the
 leading bid becomes claimable and the next cycle begins. Only the supplier can
 withdraw settled funds with `claim_funds`; bids remain escrowed until
-settlement. Listings continue recurring after the initial close; they do not
-have a final expiry in the current program. New listings default to 30-day
-cycles, with a shorter duration available for tests. No cancellation or buyout
-instruction is exposed.
+settlement. New listings default to 30-day cycles, and the supplier can set a
+shorter duration for testing.
 
-The backend stores seller-owned draft metadata. It never accepts a bid, holds
-keys or SOL, settles an auction, or decides who won. The frontend reads and
-submits auction instructions directly through Solana RPC and Wallet Adapter.
-Since the program stores current auction state rather than a bid event log, the
-app shows current winning positions and claimable funds, not historical bids.
+Listing names, descriptions, buyout prices, and terminal status are stored
+publicly in a separate `ListingMetadata` PDA, preserving the existing
+256-byte `Auction` account layout. A supplier can initialize this metadata for
+an older listing after upgrading the program. A bid at or above the configured
+buyout price refunds the previous leader, accepts the bidder, refunds any
+overage in the same transaction, makes exactly the buyout price claimable, and
+permanently closes that listing and its future cycles. A zero buyout price
+disables buyout. There is no cancellation instruction.
+
+The backend never accepts a bid, holds keys or SOL, settles an auction, or
+decides who won. The frontend reads and submits auction instructions directly
+through Solana RPC and Wallet Adapter. Since the program stores current auction
+state rather than a bid event log, the app shows current winning positions,
+supplier-owned listings, and claimable funds, not historical bids. Listing
+metadata is public; no off-chain draft feature remains. On startup the backend
+drops legacy SQLite draft and wallet-session tables from the configured
+database path.
 
 The app integration is Localnet-only and reads the generated Anchor IDL from
-`app/public/idl/ad_marketplace.json`. Off-chain drafts remain distinct from
-on-chain listings. On-chain listings store a supplier, listing ID, KYB ID, and cycle
-configuration. Draft campaign descriptions remain private off-chain; the
-current winning bidder supplies the ad image URL with their bid.
-Buyouts and cancellation are not implemented.
+`app/public/idl/ad_marketplace.json`. Each listing stores its supplier, listing
+ID, KYB reference, cycle configuration, and bidder-provided ad image URL; its
+public metadata account stores the name, description, buyout price, and
+permanent closure state.
 
-Wallet Adapter connection is not backend authentication. Draft writes require
-a one-time signed wallet challenge, verified by the API. That signature only
-authenticates the off-chain request; Solana transactions still require a
-separate wallet approval.
+## Actors and operations
 
-## Actor journeys and presentation guide
+| Actor             | Operations                                                                            | Requirements and effects                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Visitor           | Browse the marketplace and refresh listings                                           | Public account reads do not require a connected wallet or transaction fee. Listings are visible to users connected to the same Solana cluster, including listings that are not yet KYB-verified.               |
+| Supplier          | Create a listing, provide listing metadata, and claim settled proceeds                | Signs with the wallet stored as the listing supplier; pays transaction fees and account rent. The supplier supplies a public seven-digit KYB reference, but the program does not verify the business identity. |
+| Marketplace admin | Initialize the marketplace once; verify or revoke a supplier's KYB status per listing | The first wallet to call `initialize_config` becomes the admin. KYB review happens off-chain; the admin submits the result on-chain. There is no admin-transfer instruction.                                   |
+| Bidder            | Place or raise a bid, attach an ad-image URL, or trigger a buyout                     | Signs each transaction and funds the bid from their wallet. An outbid bidder receives their bid principal immediately, but not the transaction fee they already paid.                                          |
+| Operator/deployer | Run Localnet, build and deploy the program, and fund demo wallets                     | The deployment upgrade authority is separate from the marketplace admin and does not automatically receive admin privileges.                                                                                   |
 
-See [docs/README.md](./docs/README.md) for the full actor-by-actor walkthrough,
-from wallet connection and JavaScript calls to backend, RPC, Anchor program,
-escrow, settlement, and edge cases.
+One wallet can act in multiple roles. Connecting through Wallet Adapter makes
+the wallet's public key available to the app; it does not expose the private
+key or sign transactions automatically. For a write, the JavaScript client
+derives the relevant PDAs, prepares an Anchor instruction, and asks the wallet
+to approve it. The browser submits the signed transaction directly to Solana
+RPC. The program validates it and applies state changes and SOL transfers
+atomically. The backend only provides health and RPC-status endpoints; it
+does not authenticate wallets, store listings, relay transactions, or handle
+funds.
+
+### Typical listing lifecycle
+
+1. **Start the demo.** The operator runs Localnet, deploys the program, starts
+   the app and backend, and funds the wallets used by the admin, supplier, and
+   bidders. Deployment does not initialize marketplace admin configuration.
+2. **Initialize the admin.** The chosen admin wallet signs
+   `initialize_config`. Its public key is stored in the Config PDA. Initialize
+   this only on a Localnet you control: the current program has no admin
+   transfer operation.
+3. **Create a listing.** The supplier connects their wallet and submits a
+   public title and description, seven-digit KYB reference, initial close
+   time, recurring cycle duration, and optional buyout price. The transaction
+   creates the Auction and ListingMetadata accounts; the listing is immediately
+   public, but bids are rejected until it is verified. There are no off-chain
+   drafts. Older listings can have metadata initialized once by their supplier.
+4. **Verify the supplier.** The admin checks the supplier wallet and KYB
+   reference against their off-chain business records, then signs
+   `verify_supplier_kyb(true)` for that listing. The reference is public and
+   is not itself proof of identity; do not put private documents or sensitive
+   identifiers on-chain.
+5. **Bid for the listing.** A bidder enters an amount and their ad-image URL.
+   The program requires KYB verification and a bid greater than the current
+   high bid. The bid is held in the listing's Vault PDA. A higher bid refunds
+   the displaced leader immediately in the same transaction. The app's
+   **My bids** view shows the connected wallet's current winning positions and
+   listings it owns; it is not a historical bid ledger.
+6. **Settle cycles and claim proceeds.** The initial period ends at the
+   supplier's configured close time; recurring cycles follow. Deadlines do
+   not run a background job or transfer funds automatically. A later
+   `place_bid` or `claim_funds` transaction lazily settles elapsed cycles and
+   makes their leading bids claimable by the supplier. The supplier signs
+   `claim_funds` to withdraw settled proceeds from the Vault.
+7. **End a listing with buyout.** When enabled, a bid at or above the buyout
+   price ends the listing and future cycles permanently. The displaced
+   leader's bid and any amount above the buyout price are refunded atomically;
+   exactly the buyout price becomes claimable by the supplier.
+
+For the full actor-by-actor walkthrough—including account reads, transaction
+flow, cycle edge cases, and the backend's role—see
+[docs/README.md](./docs/README.md).
 
 ## Install and run
 
@@ -77,9 +136,9 @@ pnpm --filter @ad-marketplace/app dev
 
 The app defaults to Localnet RPC at `http://127.0.0.1:8899` and the program ID
 declared for Localnet in `Anchor.toml`. Auction reads and writes are disabled
-for non-loopback RPC endpoints. The backend defaults to `http://localhost:3001`,
-and the Vite dev server proxies `/api`. Drafts are stored locally in
-`backend/data/marketplace.sqlite`.
+for non-loopback RPC endpoints. The backend defaults to `http://localhost:3001`, and the Vite dev server
+proxies `/api` for health and RPC status checks. It does not persist listings
+or drafts.
 
 ## Dev container
 
@@ -107,8 +166,19 @@ container rebuilds:
 
 ```sh
 mkdir -p .surfpool
-surfpool start --no-deploy --db .surfpool/ad-marketplace.sqlite
+surfpool start --offline --no-deploy --no-tui --no-studio --db .surfpool/ad-marketplace.sqlite
 ```
+
+Before deploying, verify that Localnet is reachable from the same container
+where you will run the deploy command:
+
+```sh
+solana slot --url http://127.0.0.1:8899
+```
+
+Wait for this command to print a slot. If it reports a connection error, start
+or reconnect to Surfpool first; `127.0.0.1` refers to the current container,
+not another container or the Windows host.
 
 In another container terminal, build and deploy this workspace's program:
 
@@ -116,6 +186,20 @@ In another container terminal, build and deploy this workspace's program:
 pnpm run anchor:build:localnet
 pnpm run anchor:deploy:localnet
 ```
+
+If deployment reports `Auto-extend failed: error sending request for url
+(http://127.0.0.1:8899/)`, the RPC could not be reached while Anchor was
+extending the program account. This is a connectivity failure, not a program
+build error. Keep Surfpool running, confirm `solana slot` succeeds from the
+deploying container, then rerun `pnpm run anchor:deploy:localnet`. If the log
+reports a partial buffer, keep
+`target/deploy/ad_marketplace-upgrade-buffer.json`; Anchor can reuse it on the
+retry. Do not close that buffer unless you intend to abandon the upgrade.
+The Localnet deploy script uses the `processed` commitment and sends program
+transactions through the configured JSON-RPC endpoint (`--use-rpc`) rather
+than relying on TPU delivery. After interrupting a deploy, stale in-flight
+transactions may briefly log `Blockhash not found`; leave the partial buffer
+in place and ensure no deploy process remains before retrying.
 
 Then run these in separate terminals:
 
@@ -140,14 +224,16 @@ solana airdrop 10 <WALLET_PUBLIC_KEY> --url http://127.0.0.1:8899
 solana balance <WALLET_PUBLIC_KEY> --url http://127.0.0.1:8899
 ```
 
-On the app's **Create listing** page, use the Localnet form at the top to
-create an on-chain auction. The lower form only saves a private draft. The
-on-chain auction is visible to wallets connected to the same Localnet. The top
-form's initial close timestamp controls the first bidding period; it does not
-permanently end the listing. The lower draft's title, description, proposed
-pricing, and proposed end date are not published or enforced by the current
-program. Each bidder supplies the ad image URL with their bid. The admin must
-verify the supplier before bids are accepted.
+On the app's **Create listing** page, create an on-chain auction and enter its
+public name, description, optional buyout price, KYB ID, initial close time,
+and recurring cycle duration. The auction and metadata are visible to wallets
+connected to the same Localnet. The initial close timestamp settles the first
+bidding period; it does not permanently end the listing. A buyout at or above
+the configured price does permanently close it, with any excess bid amount
+refunded atomically. Each bidder supplies the ad image URL with their bid. The
+admin must verify the supplier before bids are accepted. Older listings need
+their supplier to publish metadata once before they can accept bids under the
+upgraded program.
 
 This Localnet is bound to the demo host's loopback address. Wallets on other
 computers will resolve `127.0.0.1` to their own computer, not this validator.

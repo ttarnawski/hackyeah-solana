@@ -12,5 +12,6 @@ describe("SOL and lamport conversion", () => {
     expect(() => solToLamports("0.0000000001")).toThrow();
     expect(() => solToLamports("0")).toThrow();
     expect(() => solToLamports("-1")).toThrow();
+    expect(solToLamports("0", true)).toBe("0");
   });
 });

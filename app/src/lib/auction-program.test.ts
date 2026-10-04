@@ -5,6 +5,7 @@ import {
   createListingId,
   deriveAuctionPda,
   deriveConfigPda,
+  deriveListingMetadataPda,
   deriveVaultPda,
   encodeU64LittleEndian,
   LOCALNET_PROGRAM_ID,
@@ -49,6 +50,12 @@ describe("auction program address helpers", () => {
         programId,
       )[0],
     );
+    expect(deriveListingMetadataPda(auction, programId)).toEqual(
+      PublicKey.findProgramAddressSync(
+        [textEncoder.encode("listing_metadata"), auction.toBytes()],
+        programId,
+      )[0],
+    );
   });
 
   it("generates deterministic, valid listing IDs", () => {
@@ -79,8 +86,15 @@ describe("auction program address helpers", () => {
       ad_url_len: adUrlBytes.length,
       supplier_claimable: new BN(0),
     };
+    const rawMetadata = {
+      auction: programId,
+      title: "Homepage placement",
+      description: "A public ad placement.",
+      buyout_price: new BN("1000000000"),
+      is_closed: false,
+    };
 
-    expect(mapRawAuctionAccount(programId, rawAuction)).toEqual({
+    expect(mapRawAuctionAccount(programId, rawAuction, rawMetadata)).toEqual({
       address: programId.toBase58(),
       supplier: supplier.toBase58(),
       listingId: "1791077069850938306",
@@ -93,6 +107,18 @@ describe("auction program address helpers", () => {
       currentWinner: null,
       adUrl,
       supplierClaimable: "0",
+      metadataInitialized: true,
+      title: "Homepage placement",
+      description: "A public ad placement.",
+      buyoutPriceLamports: "1000000000",
+      isClosed: false,
+    });
+    expect(mapRawAuctionAccount(programId, rawAuction)).toMatchObject({
+      metadataInitialized: false,
+      title: null,
+      description: null,
+      buyoutPriceLamports: "0",
+      isClosed: false,
     });
     expect(() =>
       mapRawAuctionAccount(programId, { ...rawAuction, ad_url_len: 129 }),

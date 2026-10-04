@@ -278,9 +278,8 @@ h1 {
 .hero-card-top,
 .hero-card-row,
 .section-heading,
-.draft-card-heading,
-.draft-terms,
-.session-actions {
+.listing-card-heading,
+.listing-terms {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -297,8 +296,7 @@ h1 {
 
 .not-ready,
 .status-pill,
-.draft-badge,
-.session-pill {
+.listing-badge {
   padding: 6px 8px;
   border: 1px solid rgb(225 170 89 / 28%);
   border-radius: 99px;
@@ -388,12 +386,6 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.session-pill {
-  border-color: rgb(168 243 107 / 25%);
-  background: rgb(168 243 107 / 7%);
-  color: var(--green);
-}
-
 .section-heading {
   margin-bottom: 22px;
 }
@@ -459,12 +451,6 @@ h1 {
   border-color: rgb(168 243 107 / 22%);
   background: rgb(168 243 107 / 6%);
   color: #b9e79c;
-}
-
-.create-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(270px, 0.8fr);
-  gap: 35px;
 }
 
 .compact-heading {
@@ -548,30 +534,25 @@ h1 {
   margin: -4px 0 0;
 }
 
-.drafts-panel {
-  padding-left: 24px;
-  border-left: 1px solid var(--border);
-}
-
-.draft-list {
+.listing-list {
   display: grid;
   gap: 10px;
 }
 
-.draft-card {
+.listing-card {
   padding: 14px;
   border: 1px solid #27382f;
   border-radius: 10px;
   background: #0c1511;
 }
 
-.draft-card-heading strong {
+.listing-card-heading strong {
   min-width: 0;
   font-size: 12px;
   overflow-wrap: anywhere;
 }
 
-.draft-badge {
+.listing-badge {
   padding: 4px 7px;
   border-color: rgb(168 243 107 / 24%);
   background: rgb(168 243 107 / 7%);
@@ -579,14 +560,14 @@ h1 {
   font-size: 8px;
 }
 
-.draft-card p {
+.listing-card p {
   margin: 10px 0;
   color: #94a69b;
   font-size: 10px;
   line-height: 1.6;
 }
 
-.draft-terms {
+.listing-terms {
   justify-content: flex-start;
   flex-wrap: wrap;
   margin-bottom: 9px;
@@ -595,7 +576,7 @@ h1 {
   font-size: 9px;
 }
 
-.draft-card small {
+.listing-card small {
   color: #6f8177;
   font-size: 9px;
 }
@@ -656,16 +637,6 @@ h1 {
   .hero-card {
     max-width: 520px;
   }
-
-  .create-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .drafts-panel {
-    padding: 24px 0 0;
-    border-top: 1px solid var(--border);
-    border-left: 0;
-  }
 }
 
 @media (max-width: 520px) {
@@ -694,7 +665,6 @@ h1 {
   }
 
   .wallet-panel,
-  .session-actions,
   .footer {
     align-items: flex-start;
     flex-direction: column;
@@ -748,7 +718,7 @@ h1 {
   gap: 12px;
 }
 
-.auction-card .draft-card-heading {
+.auction-card .listing-card-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -762,6 +732,24 @@ h1 {
   background: rgb(255 205 112 / 6%);
   color: #f1d296;
   font-size: 8px;
+}
+
+.closed-badge {
+  padding: 4px 7px;
+  border: 1px solid rgb(168 243 107 / 24%);
+  border-radius: 6px;
+  background: rgb(168 243 107 / 7%);
+  color: var(--green);
+  font-size: 8px;
+}
+
+.auction-description {
+  margin: 0;
+  color: #b8c9bd;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .auction-terms {
@@ -786,6 +774,10 @@ h1 {
   border-top: 1px solid #23352c;
 }
 
+.metadata-form {
+  margin-top: 12px;
+}
+
 .auction-admin-action,
 .auction-claim-action {
   justify-self: start;
@@ -796,7 +788,7 @@ h1 {
     flex-wrap: wrap;
   }
 
-  .auction-card .draft-card-heading {
+  .auction-card .listing-card-heading {
     align-items: flex-start;
     flex-direction: column;
   }

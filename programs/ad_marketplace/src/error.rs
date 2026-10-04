@@ -16,4 +16,14 @@ pub enum CustomError {
     NoFundsToClaim,
     #[msg("Initial auction end must be in the future.")]
     InitialAuctionEndMustBeFuture,
+    #[msg("Listing title must not be empty.")]
+    EmptyListingTitle,
+    #[msg("Listing title exceeds 100 UTF-8 bytes.")]
+    ListingTitleTooLong,
+    #[msg("Listing description exceeds 3000 UTF-8 bytes.")]
+    ListingDescriptionTooLong,
+    #[msg("Buyout price must exceed the current highest bid.")]
+    BuyoutPriceTooLow,
+    #[msg("This listing has permanently closed after a buyout.")]
+    ListingClosed,
 }

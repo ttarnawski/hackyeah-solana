@@ -4,9 +4,12 @@ use anchor_lang::{
 };
 
 use crate::{
-    constants::{AUCTION_SEED, CONFIG_SEED, DEFAULT_CYCLE_DURATION, MAX_AD_URL_LENGTH, VAULT_SEED},
+    constants::{
+        AUCTION_SEED, CONFIG_SEED, DEFAULT_CYCLE_DURATION, LISTING_METADATA_SEED,
+        MAX_AD_URL_LENGTH, MAX_LISTING_DESCRIPTION_LENGTH, MAX_LISTING_TITLE_LENGTH, VAULT_SEED,
+    },
     error::CustomError,
-    Auction, Config,
+    Auction, Config, ListingMetadata,
 };
 
 #[derive(Accounts)]
@@ -27,7 +30,15 @@ pub struct InitializeConfig<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(listing_id: u64)]
+#[instruction(
+    listing_id: u64,
+    kyb_id: u32,
+    title: String,
+    description: String,
+    buyout_price: u64,
+    initial_auction_end_ts: i64,
+    cycle_duration: i64
+)]
 pub struct CreateListing<'info> {
     #[account(
         init,
@@ -38,6 +49,18 @@ pub struct CreateListing<'info> {
     )]
     pub auction: Account<'info, Auction>,
 
+    #[account(
+        init,
+        payer = supplier,
+        space = ListingMetadata::space(
+            title.len().min(MAX_LISTING_TITLE_LENGTH),
+            description.len().min(MAX_LISTING_DESCRIPTION_LENGTH)
+        ),
+        seeds = [LISTING_METADATA_SEED, auction.key().as_ref()],
+        bump
+    )]
+    pub listing_metadata: Account<'info, ListingMetadata>,
+
     /// CHECK: This system-owned PDA is an empty-lamport vault with no account data.
     #[account(
         seeds = [VAULT_SEED, auction.key().as_ref()],
@@ -45,6 +68,35 @@ pub struct CreateListing<'info> {
         owner = system_program.key()
     )]
     pub vault: UncheckedAccount<'info>,
+
+    #[account(mut)]
+    pub supplier: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(title: String, description: String, buyout_price: u64)]
+pub struct InitializeListingMetadata<'info> {
+    #[account(
+        mut,
+        seeds = [AUCTION_SEED, supplier.key().as_ref(), &auction.listing_id.to_le_bytes()],
+        bump = auction.bump,
+        has_one = supplier
+    )]
+    pub auction: Account<'info, Auction>,
+
+    #[account(
+        init,
+        payer = supplier,
+        space = ListingMetadata::space(
+            title.len().min(MAX_LISTING_TITLE_LENGTH),
+            description.len().min(MAX_LISTING_DESCRIPTION_LENGTH)
+        ),
+        seeds = [LISTING_METADATA_SEED, auction.key().as_ref()],
+        bump
+    )]
+    pub listing_metadata: Account<'info, ListingMetadata>,
 
     #[account(mut)]
     pub supplier: Signer<'info>,
@@ -80,6 +132,14 @@ pub struct PlaceBid<'info> {
     )]
     pub auction: Account<'info, Auction>,
 
+    #[account(
+        mut,
+        seeds = [LISTING_METADATA_SEED, auction.key().as_ref()],
+        bump = listing_metadata.bump,
+        has_one = auction
+    )]
+    pub listing_metadata: Account<'info, ListingMetadata>,
+
     /// CHECK: The vault PDA is checked against the auction address and stored bump.
     #[account(
         mut,
@@ -109,6 +169,13 @@ pub struct ClaimFunds<'info> {
     )]
     pub auction: Account<'info, Auction>,
 
+    #[account(
+        seeds = [LISTING_METADATA_SEED, auction.key().as_ref()],
+        bump = listing_metadata.bump,
+        has_one = auction
+    )]
+    pub listing_metadata: Account<'info, ListingMetadata>,
+
     /// CHECK: The vault PDA is checked against the auction address and stored bump.
     #[account(
         mut,
@@ -136,6 +203,9 @@ pub fn handle_create_listing(
     ctx: Context<CreateListing>,
     listing_id: u64,
     kyb_id: u32,
+    title: String,
+    description: String,
+    buyout_price: u64,
     initial_auction_end_ts: i64,
     cycle_duration: i64,
 ) -> Result<()> {
@@ -143,6 +213,7 @@ pub fn handle_create_listing(
         (1_000_000..=9_999_999).contains(&kyb_id),
         CustomError::InvalidKybId
     );
+    validate_listing_metadata(&title, &description)?;
 
     let now = Clock::get()?.unix_timestamp;
     require!(
@@ -169,7 +240,40 @@ pub fn handle_create_listing(
         bump: ctx.bumps.auction,
         vault_bump: ctx.bumps.vault,
     });
+    ctx.accounts.listing_metadata.set_inner(ListingMetadata {
+        auction: ctx.accounts.auction.key(),
+        title,
+        description,
+        buyout_price,
+        is_closed: false,
+        bump: ctx.bumps.listing_metadata,
+    });
 
+    Ok(())
+}
+
+pub fn handle_initialize_listing_metadata(
+    ctx: Context<InitializeListingMetadata>,
+    title: String,
+    description: String,
+    buyout_price: u64,
+) -> Result<()> {
+    validate_listing_metadata(&title, &description)?;
+    require!(
+        buyout_price == 0 || buyout_price > ctx.accounts.auction.current_highest_bid,
+        CustomError::BuyoutPriceTooLow
+    );
+
+    ctx.accounts
+        .listing_metadata
+        .set_inner(ListingMetadata {
+            auction: ctx.accounts.auction.key(),
+            title,
+            description,
+            buyout_price,
+            is_closed: false,
+            bump: ctx.bumps.listing_metadata,
+        });
     Ok(())
 }
 
@@ -188,6 +292,10 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
         CustomError::KybNotVerified
     );
     require!(
+        !ctx.accounts.listing_metadata.is_closed,
+        CustomError::ListingClosed
+    );
+    require!(
         ad_url_bytes.len() <= MAX_AD_URL_LENGTH,
         CustomError::UrlTooLong
     );
@@ -201,6 +309,8 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
         CustomError::BidTooLow
     );
 
+    let buyout_price = ctx.accounts.listing_metadata.buyout_price;
+    let triggers_buyout = buyout_price > 0 && bid_amount >= buyout_price;
     let auction_key = auction.key();
     let vault_bump = auction.vault_bump;
     if auction.current_winner != Pubkey::default() {
@@ -230,11 +340,31 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
         bid_amount,
     )?;
 
-    auction.current_highest_bid = bid_amount;
+    if triggers_buyout {
+        let excess = bid_amount
+            .checked_sub(buyout_price)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        if excess > 0 {
+            transfer_from_vault(
+                &ctx.accounts.system_program,
+                &ctx.accounts.vault,
+                ctx.accounts.bidder.to_account_info(),
+                &auction_key,
+                vault_bump,
+                excess,
+            )?;
+        }
+        auction.supplier_claimable = auction
+            .supplier_claimable
+            .checked_add(buyout_price)
+            .ok_or(ProgramError::ArithmeticOverflow)?;
+        auction.current_highest_bid = 0;
+        ctx.accounts.listing_metadata.is_closed = true;
+    } else {
+        auction.current_highest_bid = bid_amount;
+    }
     auction.current_winner = ctx.accounts.bidder.key();
-    auction.ad_url = [0; MAX_AD_URL_LENGTH];
-    auction.ad_url[..ad_url_bytes.len()].copy_from_slice(ad_url_bytes);
-    auction.ad_url_len = ad_url_bytes.len() as u8;
+    store_current_ad_url(auction, ad_url_bytes);
 
     Ok(())
 }
@@ -242,7 +372,9 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
 pub fn handle_claim_funds(ctx: Context<ClaimFunds>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let auction = &mut ctx.accounts.auction;
-    settle_expired_cycle(auction, now)?;
+    if !ctx.accounts.listing_metadata.is_closed {
+        settle_expired_cycle(auction, now)?;
+    }
 
     let payout = auction.supplier_claimable;
     require!(payout > 0, CustomError::NoFundsToClaim);
@@ -257,6 +389,25 @@ pub fn handle_claim_funds(ctx: Context<ClaimFunds>) -> Result<()> {
         auction.vault_bump,
         payout,
     )
+}
+
+fn validate_listing_metadata(title: &str, description: &str) -> Result<()> {
+    require!(!title.trim().is_empty(), CustomError::EmptyListingTitle);
+    require!(
+        title.len() <= MAX_LISTING_TITLE_LENGTH,
+        CustomError::ListingTitleTooLong
+    );
+    require!(
+        description.len() <= MAX_LISTING_DESCRIPTION_LENGTH,
+        CustomError::ListingDescriptionTooLong
+    );
+    Ok(())
+}
+
+fn store_current_ad_url(auction: &mut Auction, ad_url_bytes: &[u8]) {
+    auction.ad_url = [0; MAX_AD_URL_LENGTH];
+    auction.ad_url[..ad_url_bytes.len()].copy_from_slice(ad_url_bytes);
+    auction.ad_url_len = ad_url_bytes.len() as u8;
 }
 
 fn settle_expired_cycle(auction: &mut Auction, now: i64) -> Result<()> {

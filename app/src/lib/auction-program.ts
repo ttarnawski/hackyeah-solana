@@ -16,6 +16,7 @@ const IDL_PATH = `${import.meta.env.BASE_URL}idl/ad_marketplace.json`;
 const REQUIRED_INSTRUCTIONS = [
   "initialize_config",
   "create_listing",
+  "initialize_listing_metadata",
   "verify_supplier_kyb",
   "place_bid",
   "claim_funds",
@@ -39,6 +40,14 @@ interface RawAuctionAccountData {
   supplier_claimable: BN;
 }
 
+interface RawListingMetadataAccountData {
+  auction: PublicKey;
+  title: string;
+  description: string;
+  buyout_price: BN;
+  is_closed: boolean;
+}
+
 interface ConfigAccountData {
   admin: PublicKey;
 }
@@ -56,6 +65,11 @@ export interface OnChainAuction {
   currentWinner: string | null;
   adUrl: string;
   supplierClaimable: string;
+  metadataInitialized: boolean;
+  title: string | null;
+  description: string | null;
+  buyoutPriceLamports: string;
+  isClosed: boolean;
 }
 
 export interface AuctionSnapshot {
@@ -133,6 +147,16 @@ export function deriveVaultPda(
   )[0];
 }
 
+export function deriveListingMetadataPda(
+  auction: PublicKey,
+  programId: PublicKey,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [textEncoder.encode("listing_metadata"), auction.toBytes()],
+    programId,
+  )[0];
+}
+
 export async function fetchAuctionSnapshot(
   connection: Connection,
 ): Promise<AuctionSnapshot> {
@@ -140,20 +164,37 @@ export async function fetchAuctionSnapshot(
   await requireDeployedProgram(connection, programId);
 
   const coder = new BorshAccountsCoder(idl);
-  const [auctionAccounts, configInfo] = await Promise.all([
+  const [auctionAccounts, metadataAccounts, configInfo] = await Promise.all([
     connection.getProgramAccounts(programId, {
       commitment: "confirmed",
       filters: [{ memcmp: coder.memcmp("Auction") }],
     }),
+    connection.getProgramAccounts(programId, {
+      commitment: "confirmed",
+      filters: [{ memcmp: coder.memcmp("ListingMetadata") }],
+    }),
     connection.getAccountInfo(deriveConfigPda(programId), "confirmed"),
   ]);
+
+  const metadataByAuction = new Map<string, RawListingMetadataAccountData>();
+  for (const { account } of metadataAccounts) {
+    const metadata = coder.decode<RawListingMetadataAccountData>(
+      "ListingMetadata",
+      account.data,
+    );
+    metadataByAuction.set(metadata.auction.toBase58(), metadata);
+  }
 
   const auctions = auctionAccounts.map(({ pubkey, account }) => {
     const auction = coder.decode<RawAuctionAccountData>(
       "Auction",
       account.data,
     );
-    return mapRawAuctionAccount(pubkey, auction);
+    return mapRawAuctionAccount(
+      pubkey,
+      auction,
+      metadataByAuction.get(pubkey.toBase58()) ?? null,
+    );
   });
 
   const admin = configInfo
@@ -174,6 +215,7 @@ export async function fetchAuctionSnapshot(
 export function mapRawAuctionAccount(
   address: PublicKey,
   auction: RawAuctionAccountData,
+  metadata: RawListingMetadataAccountData | null = null,
 ): OnChainAuction {
   const adUrlBytes = auction.ad_url;
   if (
@@ -183,6 +225,11 @@ export function mapRawAuctionAccount(
     auction.ad_url_len > adUrlBytes.length
   ) {
     throw new Error(`Auction ${address.toBase58()} has invalid ad URL data.`);
+  }
+  if (metadata && !metadata.auction.equals(address)) {
+    throw new Error(
+      `Auction ${address.toBase58()} has mismatched listing metadata.`,
+    );
   }
 
   return {
@@ -202,6 +249,11 @@ export function mapRawAuctionAccount(
       Uint8Array.from(adUrlBytes).subarray(0, auction.ad_url_len),
     ),
     supplierClaimable: auction.supplier_claimable.toString(),
+    metadataInitialized: metadata !== null,
+    title: metadata?.title ?? null,
+    description: metadata?.description ?? null,
+    buyoutPriceLamports: metadata?.buyout_price.toString() ?? "0",
+    isClosed: metadata?.is_closed ?? false,
   };
 }
 
@@ -226,6 +278,9 @@ export async function createOnChainListing(
   input: {
     listingId: string;
     kybId: number;
+    title: string;
+    description: string;
+    buyoutPriceLamports: string;
     initialAuctionEndTs: string;
     cycleDurationSeconds: string;
   },
@@ -242,6 +297,12 @@ export async function createOnChainListing(
   ) {
     throw new Error("KYB ID must be between 1000000 and 9999999.");
   }
+  validateListingMetadata(input.title, input.description);
+  const buyoutPrice = parseUnsignedInteger(
+    input.buyoutPriceLamports,
+    "Buyout price",
+    U64_MAX,
+  );
   const initialAuctionEndTs = parseUnsignedInteger(
     input.initialAuctionEndTs,
     "Initial auction end",
@@ -261,18 +322,55 @@ export async function createOnChainListing(
 
   const { program, programId } = await getWalletProgram(connection, wallet);
   const auction = deriveAuctionPda(wallet.publicKey, listingId, programId);
+  const listingMetadata = deriveListingMetadataPda(auction, programId);
   const vault = deriveVaultPda(auction, programId);
 
   return program.methods
     .createListing(
       new BN(listingId.toString()),
       input.kybId,
+      input.title,
+      input.description,
+      new BN(buyoutPrice.toString()),
       new BN(initialAuctionEndTs.toString()),
       new BN(cycleDuration.toString()),
     )
     .accountsPartial({
       auction,
+      listingMetadata,
       vault,
+      supplier: wallet.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+}
+
+export async function initializeOnChainListingMetadata(
+  connection: Connection,
+  wallet: AnchorWallet,
+  auctionAddress: PublicKey,
+  input: {
+    title: string;
+    description: string;
+    buyoutPriceLamports: string;
+  },
+): Promise<string> {
+  validateListingMetadata(input.title, input.description);
+  const buyoutPrice = parseUnsignedInteger(
+    input.buyoutPriceLamports,
+    "Buyout price",
+    U64_MAX,
+  );
+  const { program, programId } = await getWalletProgram(connection, wallet);
+  return program.methods
+    .initializeListingMetadata(
+      input.title,
+      input.description,
+      new BN(buyoutPrice.toString()),
+    )
+    .accountsPartial({
+      auction: auctionAddress,
+      listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
       supplier: wallet.publicKey,
       systemProgram: SystemProgram.programId,
     })
@@ -326,6 +424,7 @@ export async function placeOnChainBid(
     .placeBid(new BN(bidAmount.toString()), adUrl)
     .accountsPartial({
       auction: auctionAddress,
+      listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
       vault,
       bidder: wallet.publicKey,
       previousWinner,
@@ -345,11 +444,26 @@ export async function claimSupplierFunds(
     .claimFunds()
     .accountsPartial({
       auction: auctionAddress,
+      listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
       vault: deriveVaultPda(auctionAddress, programId),
       supplier: wallet.publicKey,
       systemProgram: SystemProgram.programId,
     })
     .rpc();
+}
+
+function validateListingMetadata(title: string, description: string): void {
+  if (title.trim().length === 0) {
+    throw new Error("Listing title must not be empty.");
+  }
+  if (textEncoder.encode(title).length > 100) {
+    throw new Error("Listing title must be no more than 100 UTF-8 bytes.");
+  }
+  if (textEncoder.encode(description).length > 3_000) {
+    throw new Error(
+      "Listing description must be no more than 3000 UTF-8 bytes.",
+    );
+  }
 }
 
 async function getWalletProgram(
