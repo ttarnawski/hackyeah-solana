@@ -13,6 +13,7 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { lamportsToSol, solToLamports } from "../lib/amounts";
 import { toLocalDateTimeInput } from "../lib/datetime";
+import { solanaClusterName } from "../lib/solana";
 import {
   createListingId,
   createOnChainListing,
@@ -73,7 +74,10 @@ export function OnChainAuctions({
     } catch (error) {
       setSnapshotState({
         kind: "error",
-        message: errorMessage(error, "Could not load Localnet auctions."),
+        message: errorMessage(
+          error,
+          `Could not load ${solanaClusterName} auctions.`,
+        ),
       });
     }
   }, [connection]);
@@ -133,7 +137,7 @@ export function OnChainAuctions({
   const initializeConfig = () =>
     void runTransaction(
       "initialize-config",
-      "Localnet admin config initialized.",
+      `${solanaClusterName} admin config initialized.`,
       (wallet) => initializeAdminConfig(connection, wallet),
     );
 
@@ -240,14 +244,16 @@ export function OnChainAuctions({
       <div className="section-heading">
         <div>
           <p className="eyebrow">
-            {view === "bids" ? "Current state from Solana" : "Localnet program"}
+            {view === "bids"
+              ? "Current state from Solana"
+              : `${solanaClusterName} program`}
           </p>
           <h2>{sectionHeading}</h2>
         </div>
         <div className="section-actions">
           <span className="status-pill">
             {snapshotState.kind === "loading"
-              ? "Reading Localnet…"
+              ? `Reading ${solanaClusterName}…`
               : snapshotState.kind === "error"
                 ? "Program unavailable"
                 : `${snapshotState.snapshot.auctions.length} on-chain listing${snapshotState.snapshot.auctions.length === 1 ? "" : "s"}`}
@@ -278,18 +284,18 @@ export function OnChainAuctions({
 
       {snapshotState.kind === "loading" && (
         <div className="empty-state small-empty">
-          <h3>Checking the Localnet auction program</h3>
+          <h3>Checking the {solanaClusterName} auction program</h3>
           <p>Loading its generated IDL and current on-chain account state.</p>
         </div>
       )}
 
       {snapshotState.kind === "error" && (
         <div className="empty-state small-empty">
-          <h3>Localnet auctions are not ready</h3>
+          <h3>{solanaClusterName} auctions are not ready</h3>
           <p>{snapshotState.message}</p>
           <p className="muted-copy">
-            Check that the configured Localnet RPC is reachable and that the
-            deployed program and generated IDL are compatible.
+            Check that the configured {solanaClusterName} RPC is reachable and
+            that the deployed program and generated IDL are compatible.
           </p>
           <button
             className="secondary-button"
@@ -305,12 +311,14 @@ export function OnChainAuctions({
         <div className="on-chain-create">
           {snapshotState.snapshot.admin === null ? (
             <div className="notice warning-notice">
-              <strong>No admin config exists on this Localnet.</strong>
+              <strong>
+                No admin config exists on this {solanaClusterName}.
+              </strong>
               <p>
                 Choose a dedicated wallet you control. The first wallet to
                 initialize this config becomes the KYB admin, and this program
                 has no admin-transfer instruction. Check the connected wallet
-                above before approving; only do this on your Localnet.
+                and selected cluster before approving.
               </p>
               <button
                 className="primary-button"
@@ -320,7 +328,7 @@ export function OnChainAuctions({
               >
                 {pendingAction === "initialize-config"
                   ? "Waiting for wallet…"
-                  : "Initialize Localnet admin"}
+                  : `Initialize ${solanaClusterName} admin`}
               </button>
             </div>
           ) : (
@@ -374,7 +382,7 @@ export function OnChainAuctions({
             <p className="muted-copy">
               {walletAddress
                 ? "This wallet has not created an on-chain listing yet."
-                : "Connect a wallet to create a Localnet listing."}
+                : `Connect a wallet to create a ${solanaClusterName} listing.`}
             </p>
           )}
         </div>
@@ -387,16 +395,16 @@ export function OnChainAuctions({
               <div className="empty-icon">↗</div>
               <h3>No on-chain auctions are available yet</h3>
               <p>
-                The program is connected to Localnet, but no listing accounts
-                have been created. Create a listing and have the admin verify
-                its supplier before it can receive bids.
+                The program is connected to {solanaClusterName}, but no listing
+                accounts have been created. Create a listing and have the admin
+                verify its supplier before it can receive bids.
               </p>
               <button
                 className="primary-button"
                 onClick={onNavigateToCreate}
                 type="button"
               >
-                Create a Localnet listing
+                Create a {solanaClusterName} listing
               </button>
             </div>
           ) : (
@@ -428,7 +436,7 @@ export function OnChainAuctions({
               <h3>Connect a wallet to view your positions</h3>
               <p>
                 The app reads your current highest bids and supplier claimable
-                balances directly from Localnet.
+                balances directly from {solanaClusterName}.
               </p>
             </div>
           ) : visibleAuctions.length === 0 ? (

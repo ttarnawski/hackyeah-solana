@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { readSolanaRpcStatus, solanaCluster } from "./lib/solana";
+import { readSolanaRpcStatus, solanaClusterName } from "./lib/solana";
 import { OnChainAuctions } from "./components/OnChainAuctions";
 
 type Page = "marketplace" | "create" | "bids";
@@ -93,7 +93,7 @@ export default function App() {
           className={`network-dot ${rpcState.kind === "connected" ? "online" : ""}`}
         />
         <span>
-          {rpcState.kind === "loading" && `Connecting to ${solanaCluster}…`}
+          {rpcState.kind === "loading" && `Connecting to ${solanaClusterName}…`}
           {rpcState.kind === "error" && rpcState.message}
           {rpcState.kind === "connected" &&
             `${rpcState.cluster} · slot ${rpcState.slot} · RPC connected`}
@@ -144,7 +144,7 @@ export default function App() {
           <div className="hero-card-top">
             <span className="live-indicator" />
             <span>ON-CHAIN AUCTIONS</span>
-            <span className="not-ready">LOCALNET ONLY</span>
+            <span className="not-ready">{solanaClusterName.toUpperCase()}</span>
           </div>
           <div className="hero-price">Default cycle</div>
           <div className="hero-value">
@@ -160,8 +160,8 @@ export default function App() {
             <strong>Ends listing permanently</strong>
           </div>
           <div className="hero-card-note">
-            Transactions require a connected wallet and a deployed Localnet
-            program. Metadata is public on-chain.
+            Transactions require a connected wallet and a deployed{" "}
+            {solanaClusterName} program. Metadata is public on-chain.
           </div>
         </div>
       </section>
@@ -186,10 +186,11 @@ export default function App() {
 
       <footer className="footer">
         <span>
-          Non-custodial · SOL terms in lamports · Cluster: {solanaCluster}
+          Non-custodial · SOL terms in lamports · Cluster: {solanaClusterName}
         </span>
         <span>
-          Localnet only · Public listing metadata · Atomic buyout and refund
+          {solanaClusterName} · Public listing metadata · Atomic buyout and
+          refund
         </span>
       </footer>
     </main>

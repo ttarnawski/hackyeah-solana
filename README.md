@@ -8,7 +8,7 @@ frontend and backend scaffold for a Solana ad-marketplace demo.
 - `programs/ad_marketplace/` — Anchor program with KYB-gated recurring listings,
   escrowed SOL bids, immediate outbid refunds, and supplier payouts.
 - `app/` — React/Vite client with Wallet Adapter connection and Solana Kit RPC
-  status checks.
+  status checks; supports Localnet and Devnet.
 - `backend/` — Fastify health and Localnet RPC status API. It removes legacy
   draft and wallet-session tables at startup; it does not store new drafts.
 - `tests/` — Anchor integration tests covering KYB verification, bidding,
@@ -53,11 +53,13 @@ metadata is public; no off-chain draft feature remains. On startup the backend
 drops legacy SQLite draft and wallet-session tables from the configured
 database path.
 
-The app integration is Localnet-only and reads the generated Anchor IDL from
-`app/public/idl/ad_marketplace.json`. Each listing stores its supplier, listing
-ID, KYB reference, cycle configuration, and bidder-provided ad image URL; its
-public metadata account stores the name, description, buyout price, and
-permanent closure state.
+The app defaults to Localnet and reads the generated Anchor IDL from
+`app/public/idl/ad_marketplace.json`. Devnet is supported after deploying the
+program; its RPC endpoint is checked against Devnet's genesis hash before
+program state is read or a transaction is submitted. Each listing stores its
+supplier, listing ID, KYB reference, cycle configuration, and bidder-provided
+ad image URL; its public metadata account stores the name, description, buyout
+price, and permanent closure state.
 
 ## Actors and operations
 
@@ -139,10 +141,13 @@ pnpm --filter @ad-marketplace/app dev
 ```
 
 The app defaults to Localnet RPC at `http://127.0.0.1:8899` and the program ID
-declared for Localnet in `Anchor.toml`. Auction reads and writes are disabled
-for non-loopback RPC endpoints. The backend defaults to `http://localhost:3001`, and the Vite dev server
-proxies `/api` for health and RPC status checks. It does not persist listings
-or drafts.
+declared in `Anchor.toml`. Localnet reads and writes require a loopback RPC
+endpoint. To use Devnet, set `VITE_SOLANA_CLUSTER=devnet`,
+`VITE_SOLANA_RPC_URL=https://api.devnet.solana.com`, and the deployed program
+ID in `app/.env`; see [app/README.md](./app/README.md) for deployment and
+test-SOL steps. The backend defaults to `http://localhost:3001`, and the Vite
+dev server proxies `/api` for health and RPC status checks. It does not persist
+listings or drafts.
 
 ## Dev container
 
@@ -241,8 +246,9 @@ upgraded program.
 
 This Localnet is bound to the demo host's loopback address. Wallets on other
 computers will resolve `127.0.0.1` to their own computer, not this validator.
-For a remote demo, use a shared reachable cluster and update the app's
-Localnet-only RPC restriction deliberately.
+For a Devnet demo, deploy the program and follow the Devnet setup in
+[`app/README.md`](./app/README.md). The app validates that its configured RPC is
+actually Devnet before it reads or writes auction state.
 
 Keep Solana wallet and program keypairs out of source control. Do not run
 `solana-test-validator --reset` alongside the Surfpool Localnet.
