@@ -14,25 +14,28 @@ The app has one listing path: the supplier creates an Auction PDA and a
 separate ListingMetadata PDA on-chain. Public listing name, description, and
 buyout price are visible to every wallet on the same cluster. The program
 holds the current leading bid in a vault PDA, refunds an outbid leader
-immediately, and makes completed-cycle proceeds claimable by the supplier.
+immediately, and transfers completed-cycle proceeds to the supplier when an
+auction transaction settles the cycle.
 There is no off-chain draft workflow.
 
 The supplier's initial close time starts a recurring auction schedule; it is
 not a final listing expiry. Cycle changes are **lazy**: a later successful
 `place_bid` or `claim_funds` transaction observes an elapsed deadline and
-settles the cycle. A buyout is different: a bid at or above the configured
-price ends the listing and its future cycles permanently. Nothing runs
-automatically at a deadline.
+settles the cycle. A rollover bid pays the supplier in that same transaction.
+If no bid triggers rollover, any wallet can call `claim_funds` to settle and
+pay the supplier. Nothing runs at the deadline without a transaction invoking
+the program. A buyout is different: a bid at or above the configured price
+ends the listing and its future cycles permanently.
 
 ## 2. Actors and trust boundaries
 
-| Actor             | How the app identifies them                                      | Main actions                                               | What that identity does not prove                                          |
-| ----------------- | ---------------------------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Visitor           | No wallet required for public on-chain reads                     | Browse public auctions and status                          | Nothing; browsing is read-only                                             |
-| Supplier          | The wallet signing `create_listing`                              | Create an auction and later claim its settled funds        | The wallet signature does not prove the supplier's legal-business identity |
-| Bidder            | The wallet signing `place_bid`                                   | Escrow a bid, provide an ad-image URL, or trigger a buyout | A bid is not a historical bid record                                       |
-| Marketplace admin | `Config.admin`, set by the first `initialize_config` transaction | Verify or revoke a listing's KYB flag                      | The flag does not perform a KYB check or validate business documents       |
-| Operator/deployer | The key authorized to deploy or upgrade the program              | Run Localnet, build, deploy, and fund demo wallets         | The upgrade authority is not automatically the marketplace admin           |
+| Actor             | How the app identifies them                                      | Main actions                                                      | What that identity does not prove                                          |
+| ----------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Visitor           | No wallet required to browse; any wallet can trigger payout      | Browse auctions or submit a permissionless supplier payout        | The caller pays the fee but never receives or controls the payout          |
+| Supplier          | The wallet signing `create_listing`                              | Create/edit listing details and receive settled proceeds          | The wallet signature does not prove the supplier's legal-business identity |
+| Bidder            | The wallet signing `place_bid`                                   | Escrow a bid, provide an ad-image URL, trigger a buyout or payout | A bid is not a historical bid record                                       |
+| Marketplace admin | `Config.admin`, set by the first `initialize_config` transaction | Verify or revoke a listing's KYB flag                             | The flag does not perform a KYB check or validate business documents       |
+| Operator/deployer | The key authorized to deploy or upgrade the program              | Run Localnet, build, deploy, and fund demo wallets                | The upgrade authority is not automatically the marketplace admin           |
 
 One wallet can perform multiple roles. The program checks the required signer
 and the admin key, but it does not require the supplier, admin, and bidders to
@@ -136,12 +139,15 @@ Older Auction accounts created before ListingMetadata existed remain readable.
 Their supplier can initialize the metadata PDA once; that instruction is
 supplier-authorized and rejects a nonzero buyout at or below the current
 highest bid. A listing without initialized metadata cannot accept bids or
-claims through the upgraded instructions until its supplier publishes details.
+settle proceeds through the upgraded instructions until its supplier publishes
+details. After initialization, the supplier can update the title and
+description; the buyout price is unchanged by that update.
 
-The Vault balance represents the current escrowed high bid plus any settled
-supplier funds not yet claimed. Settlement changes the Auction's accounting;
-it does not itself transfer the settled SOL out of the Vault. The supplier's
-claim transaction performs that transfer.
+The Vault balance represents the current escrowed high bid plus any supplier
+funds awaiting payout. A rollover bid settles the expired cycle and transfers
+its proceeds from the Vault to the supplier atomically. If no bid triggers
+rollover, any wallet can call `claim_funds` to settle and pay the supplier; that
+caller pays the transaction fee.
 
 The backend is not a listing database or transaction relay. The current
 leader's ad-image URL is public Auction state and may be replaced by a later
@@ -226,7 +232,8 @@ exists.
 
 Older Auctions keep their existing initial close time and state. Their
 supplier can publish a ListingMetadata PDA from the listing card; this is a
-one-time initialization, not an off-chain draft or metadata edit.
+one-time initialization, not an off-chain draft. The supplier can later edit
+the public title and description without changing the buyout price.
 
 ### F. Admin checks and verifies supplier KYB
 
@@ -244,8 +251,8 @@ one-time initialization, not an off-chain draft or metadata edit.
 Only the configured admin can perform the verification instruction. The
 program does not inspect documents or check that `kyb_id` is unique. Revoking
 verification blocks future bids; it does not automatically refund, settle, or
-erase an existing leading bid. Supplier claims remain governed by the normal
-cycle/claim rules.
+erase an existing leading bid. Completed-cycle payouts still go to the supplier;
+any wallet may pay the transaction fee to trigger an eligible payout.
 
 ### G. Bidder places the first bid
 
@@ -288,43 +295,44 @@ The state transition is evaluated on-chain by `place_bid` or `claim_funds`:
 
 1. Before the initial close, the listing is cycle 0. Bids compete normally.
 2. On the first successful transaction at or after the initial close, the
-   current high bid is added to `supplier_claimable`, the winner and URL are
-   cleared, and cycle 1 begins at the initial close timestamp.
+   current high bid is paid to the supplier, the winner and URL are cleared,
+   and cycle 1 begins at the initial close timestamp.
 3. If that transaction is a bid, the new bid is then accepted as a bid in the
-   recurring cycle, subject to the normal checks.
-4. At a recurring cycle boundary, the current high bid is added to
-   `supplier_claimable`, the active winner and URL are cleared, and the cycle
-   advances. A valid post-deadline bid can trigger this transition and start
-   the next bidding position.
+   recurring cycle, subject to the normal checks. The same transaction pays
+   any completed-cycle proceeds before depositing the new bid.
+4. At a recurring cycle boundary, a rollover bid pays the previous cycle's
+   high bid to the supplier, clears the active winner and URL, advances the
+   cycle, and starts the next bidding position.
 5. If several cycle durations elapsed without transactions, the next
-   successful operation advances by the elapsed number of cycles. No
-   transactions are created for skipped periods.
+   successful operation advances by the elapsed number of cycles. The current
+   high bid is settled once; no transactions are created for skipped periods.
 
 A wall-clock wait or page refresh alone does not settle a cycle. The UI can
 show that a deadline appears to have passed, but the Solana `Clock` and a
-successful transaction are authoritative. The supplier's initial close is the
-first auction's close, not a final listing expiry. A successful buyout is the
-separate permanent end condition; there is no cancellation instruction.
+successful transaction invoking the program are authoritative. If no bid
+triggers rollover, any connected wallet can call `claim_funds` to settle and
+pay the supplier. The caller pays the transaction fee. The supplier's initial
+close is the first auction's close, not a final listing expiry. A successful
+buyout is the separate permanent end condition; there is no cancellation
+instruction.
 
-### J. Supplier claims settled funds
+### J. Any wallet triggers settlement and supplier payout
 
-1. Once a cycle is due, the supplier can choose **Claim** on their listing.
-   The **My bids** page shows all supplier-owned listings as well as listings
-   where the wallet currently leads.
-2. The wallet approves `claim_funds`. The program checks that this signer is
-   the Auction's supplier and, for an open listing, lazily settles an expired
-   high bid if any.
-3. If `supplier_claimable > 0`, the program sets it to zero and transfers that
-   amount from the Vault to the supplier using the Vault PDA signer seeds.
-4. The supplier pays the transaction fee and receives the payout.
+1. If there is no rollover bid after a cycle deadline, any connected wallet
+   can choose **Settle and pay supplier** on the listing.
+2. The caller approves `claim_funds` and pays the transaction fee. The program
+   lazily settles an expired high bid if the listing is still open.
+3. The program transfers all settled proceeds directly from the Vault to the
+   supplier using the Vault PDA signer seeds; the caller does not receive or
+   control the funds.
 
-Claiming does not withdraw a still-active, unexpired high bid. Claimable funds
-can accumulate across completed cycles and one claim withdraws the accumulated
-amount. If there are no settled funds and no expiring bid to settle, the
-program returns `NoFundsToClaim`; a failed transaction does not persist a
-rollover. For a bought-out listing, the buyout is already claimable and
-`claim_funds` skips ordinary cycle settlement so the final buyer remains
-recorded.
+The `place_bid` path also settles and pays proceeds when a bid crosses a cycle
+boundary. A wall-clock deadline alone does nothing: without a transaction
+invoking `place_bid` or `claim_funds`, no on-chain payout can occur. If there
+are no settled funds and no expired high bid to settle, the program returns
+`NoFundsToClaim`; a failed transaction does not persist a rollover. For a
+bought-out listing, `claim_funds` skips ordinary cycle settlement so the final
+buyer remains recorded, but can still pay the buyout price to the supplier.
 
 ### K. Bidder triggers a buyout
 
@@ -336,11 +344,12 @@ recorded.
 3. The program transfers the submitted amount into the Vault, refunds the
    displaced leader, and sends any amount above the buyout price back to the
    bidder in the same transaction.
-4. The program makes exactly the configured buyout price claimable, records
+4. The program reserves exactly the configured buyout price for the supplier, records
    the buyer and URL, sets the active highest bid to zero, and marks
    ListingMetadata closed.
 5. Future bids fail with `ListingClosed`; no later recurring cycle can begin.
-   The supplier can claim the buyout proceeds with `claim_funds`.
+   Any connected wallet can submit `claim_funds` to pay the buyout proceeds to
+   the supplier; the caller pays the transaction fee.
 
 The bid is accepted at or above the buyout threshold, but the buyer's net bid
 principal is exactly the configured price. Any failed refund, deposit, or
@@ -359,31 +368,33 @@ The on-chain Auction stores the current position, not a log of every bid.
 
 ## 6. JavaScript operation-to-system effect
 
-| User action                          | JavaScript/client path                 | Solana or backend operation                        | Persistent effect                                                           |
-| ------------------------------------ | -------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
-| Check network                        | `readSolanaRpcStatus()`                | RPC `getSlot` and `getGenesisHash`                 | None                                                                        |
-| Browse auctions                      | `fetchAuctionSnapshot()`               | RPC reads for Auction, ListingMetadata, and Config | None                                                                        |
-| Initialize admin                     | `initializeAdminConfig()`              | Anchor `initialize_config`                         | Creates Config PDA                                                          |
-| Create active listing                | `createOnChainListing()`               | Anchor `create_listing`                            | Creates Auction and ListingMetadata PDAs                                    |
-| Publish details for an older listing | `initializeOnChainListingMetadata()`   | Anchor `initialize_listing_metadata`               | Creates its supplier-authorized ListingMetadata PDA once                    |
-| Verify/revoke KYB                    | `setSupplierKybVerified()`             | Anchor `verify_supplier_kyb`                       | Changes that Auction's verification flag                                    |
-| Bid or outbid                        | `placeOnChainBid()`                    | Anchor `place_bid`                                 | Transfers bid/refund and changes current Auction state                      |
-| Trigger buyout                       | `placeOnChainBid()` with bid >= buyout | Anchor `place_bid`                                 | Refunds old leader and overage, makes exact price claimable, closes listing |
-| Claim                                | `claimSupplierFunds()`                 | Anchor `claim_funds`                               | Transfers settled SOL and clears claimable accounting                       |
+| User action                          | JavaScript/client path                 | Solana or backend operation                        | Persistent effect                                                                     |
+| ------------------------------------ | -------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Check network                        | `readSolanaRpcStatus()`                | RPC `getSlot` and `getGenesisHash`                 | None                                                                                  |
+| Browse auctions                      | `fetchAuctionSnapshot()`               | RPC reads for Auction, ListingMetadata, and Config | None                                                                                  |
+| Initialize admin                     | `initializeAdminConfig()`              | Anchor `initialize_config`                         | Creates Config PDA                                                                    |
+| Create active listing                | `createOnChainListing()`               | Anchor `create_listing`                            | Creates Auction and ListingMetadata PDAs                                              |
+| Publish details for an older listing | `initializeOnChainListingMetadata()`   | Anchor `initialize_listing_metadata`               | Creates its supplier-authorized ListingMetadata PDA once                              |
+| Edit listing title/description       | `updateOnChainListingMetadata()`       | Anchor `update_listing_metadata`                   | Resizes metadata if needed and updates public text                                    |
+| Verify/revoke KYB                    | `setSupplierKybVerified()`             | Anchor `verify_supplier_kyb`                       | Changes that Auction's verification flag                                              |
+| Bid or outbid                        | `placeOnChainBid()`                    | Anchor `place_bid`                                 | Transfers bid/refund and changes current Auction state                                |
+| Trigger buyout                       | `placeOnChainBid()` with bid >= buyout | Anchor `place_bid`                                 | Refunds old leader and overage, reserves the exact price for supplier, closes listing |
+| Settle and pay supplier              | `settleAndPaySupplier()`               | Anchor `claim_funds`                               | Any caller can trigger settlement and transfer proceeds to supplier                   |
 
 All listing reads and writes use the app's Solana RPC connection and Anchor
 IDL. The backend only exposes health and RPC status; it is not an auction
-indexer, transaction relay, or listing store.
+indexer, transaction relay, or listing store. If `place_bid` causes cycle
+rollover, it also pays the old cycle's supplier proceeds atomically.
 
 ## 7. Money and state transitions
 
-| Moment          | Bidder wallet                                                | Vault                                              | Auction accounting                                                                   | Supplier wallet                             |
-| --------------- | ------------------------------------------------------------ | -------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
-| First bid       | Pays bid plus transaction fee                                | Receives bid                                       | Records high bid and winner                                                          | No payout yet                               |
-| Higher bid      | New bidder pays new bid plus fee                             | Old bid leaves as refund; new bid enters           | Winner, high bid, and URL update                                                     | No payout yet                               |
-| Buyout bid      | Pays the submitted amount, then receives any excess back     | Old bid leaves as refund; net buyout price remains | Records final buyer/URL, zeroes active bid, marks closed, credits exact buyout price | Buyout becomes claimable                    |
-| Cycle settles   | No new bid transfer unless the triggering operation is a bid | Still holds the settled SOL                        | High bid moves to `supplier_claimable`; active winner clears                         | No automatic payout                         |
-| Supplier claims | No change                                                    | Pays claimable amount out                          | Claimable amount becomes zero                                                        | Receives payout, less their transaction fee |
+| Moment                | Bidder wallet                                                     | Vault                                              | Auction accounting                                                                    | Supplier wallet                                     |
+| --------------------- | ----------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| First bid             | Pays bid plus transaction fee                                     | Receives bid                                       | Records high bid and winner                                                           | No payout yet                                       |
+| Higher bid            | New bidder pays new bid plus fee                                  | Old bid leaves as refund; new bid enters           | Winner, high bid, and URL update                                                      | No payout yet                                       |
+| Buyout bid            | Pays the submitted amount, then receives any excess back          | Old bid leaves as refund; net buyout price remains | Records final buyer/URL, zeroes active bid, marks closed, reserves exact buyout price | No payout until a transaction invokes `claim_funds` |
+| Cycle settles         | Bidder deposits a new bid only if rollover is part of `place_bid` | Pays old bid to supplier; receives new bid if any  | Clears the expired high bid and advances cycle                                        | Receives payout in the triggering transaction       |
+| Permissionless settle | Caller pays the transaction fee                                   | Pays settled amount out                            | Clears claimable amount and settles any due cycle                                     | Receives payout; caller does not receive funds      |
 
 The program uses lamports internally (`1 SOL = 1,000,000,000 lamports`). A
 transaction failure rolls back its instruction's account changes and transfers,
@@ -391,26 +402,26 @@ but the network may still charge a transaction fee.
 
 ## 8. Important errors and edge cases
 
-| Scenario                                                                    | Expected result                                                                                                    |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| No wallet connected                                                         | Public reads remain available; transaction actions require a wallet                                                |
-| RPC unavailable, wrong program ID, missing/stale IDL, or undeployed program | Auction panel reports that Localnet is not ready; fix the Localnet/build/deploy/IDL wiring and retry               |
-| Config not initialized                                                      | The app guides the first wallet to initialize it; later initialization cannot replace the admin                    |
-| Non-admin attempts KYB verification                                         | Program rejects the instruction because the signer is not `Config.admin`                                           |
-| Supplier not KYB verified                                                   | `place_bid` is rejected; the high bid does not change                                                              |
-| KYB ID is not seven digits or initial close is not in the future            | Form/client rejects it; the program independently validates the ID and close time                                  |
-| Bid is equal to or below current high bid                                   | `BidTooLow`; refresh if another transaction may have changed the listing                                           |
-| Previous-winner account is stale or incorrect                               | `InvalidPreviousWinner`; no refund or new bid is committed                                                         |
-| A bid reaches or exceeds the buyout price                                   | The overage is refunded atomically, exactly the buyout price becomes claimable, and the listing closes permanently |
-| Bid or claim targets a closed listing                                       | Further bids fail with `ListingClosed`; supplier claims remain available                                           |
-| An older listing has no ListingMetadata PDA                                 | Its supplier must initialize public details before bidding or claiming with the upgraded program                   |
-| Title or description exceeds its byte limit                                 | The client or program rejects it (100 UTF-8 bytes for title; 3,000 for description)                                |
-| URL exceeds 128 UTF-8 bytes                                                 | Client or program rejects the bid                                                                                  |
-| Bidder/supplier/admin lacks SOL                                             | The transfer/account creation fails; fund the Localnet wallet and retry                                            |
-| Claim has no settled proceeds                                               | `NoFundsToClaim`; no payout occurs                                                                                 |
-| Deadline passes while nobody submits a transaction                          | No on-chain state changes. A later valid bid or successful claim must trigger settlement                           |
-| Wallet connects to a different Localnet                                     | It sees different state; all demo participants must use the same reachable RPC                                     |
-| User is outbid                                                              | The bid principal is refunded immediately; no historical position is retained in the app                           |
+| Scenario                                                                    | Expected result                                                                                                             |
+| --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| No wallet connected                                                         | Public reads remain available; transaction actions require a wallet                                                         |
+| RPC unavailable, wrong program ID, missing/stale IDL, or undeployed program | Auction panel reports that Localnet is not ready; fix the Localnet/build/deploy/IDL wiring and retry                        |
+| Config not initialized                                                      | The app guides the first wallet to initialize it; later initialization cannot replace the admin                             |
+| Non-admin attempts KYB verification                                         | Program rejects the instruction because the signer is not `Config.admin`                                                    |
+| Supplier not KYB verified                                                   | `place_bid` is rejected; the high bid does not change                                                                       |
+| KYB ID is not seven digits or initial close is not in the future            | Form/client rejects it; the program independently validates the ID and close time                                           |
+| Bid is equal to or below current high bid                                   | `BidTooLow`; refresh if another transaction may have changed the listing                                                    |
+| Previous-winner account is stale or incorrect                               | `InvalidPreviousWinner`; no refund or new bid is committed                                                                  |
+| A bid reaches or exceeds the buyout price                                   | The overage is refunded atomically, the exact buyout price is reserved for the supplier, and the listing closes permanently |
+| Bid or claim targets a closed listing                                       | Further bids fail with `ListingClosed`; anyone can trigger the supplier payout                                              |
+| An older listing has no ListingMetadata PDA                                 | Its supplier must initialize public details before bidding or settling proceeds with the upgraded program                   |
+| Title or description exceeds its byte limit                                 | The client or program rejects create, publish, or update (100 UTF-8 bytes for title; 3,000 for description)                 |
+| URL exceeds 128 UTF-8 bytes                                                 | Client or program rejects the bid                                                                                           |
+| Bidder/supplier/admin lacks SOL                                             | The transfer/account creation fails; fund the Localnet wallet and retry                                                     |
+| Settlement has no completed bid or payout balance                           | `NoFundsToClaim`; no payout occurs                                                                                          |
+| Deadline passes while nobody submits a transaction                          | No on-chain state changes. A later bid pays the old cycle's proceeds, or any wallet can call `claim_funds`                  |
+| Wallet connects to a different Localnet                                     | It sees different state; all demo participants must use the same reachable RPC                                              |
+| User is outbid                                                              | The bid principal is refunded immediately; no historical position is retained in the app                                    |
 
 ## 9. Current product limits to state in a presentation
 
@@ -418,7 +429,8 @@ but the network may still charge a transaction fee.
 - KYB documents are checked off-chain. The program stores a public reference and
   admin-controlled boolean, not documents or an identity proof.
 - Listing title, description, buyout price, and closure are public in a separate
-  ListingMetadata PDA. They are not private seller data.
+  ListingMetadata PDA. Suppliers can edit the title and description, but they
+  are not private seller data.
 - The current high bid is the only bid state retained by each Auction. There is
   no historical bid feed or configured indexer.
 - There is no off-chain draft feature. The backend drops legacy draft/session
@@ -453,14 +465,13 @@ but the network may still charge a transaction fee.
    highest bid, and Vault escrow.
 6. Connect bidder B and outbid A. Show that A's principal is refunded in the
    same transaction and B becomes the leader.
-7. For a listing without buyout, advance past a cycle boundary and submit a
-   valid next bid or have the supplier claim. Explain that this transaction—not
-   the passage of time alone—settles the completed cycle.
-8. Have the supplier claim the completed-cycle proceeds and show the
-   `supplier_claimable` amount return to zero.
-9. On a separate listing, submit a bid above its buyout price. Show the former
+7. For a listing without buyout, advance past a cycle boundary. Submit a valid
+   next bid to show the cycle proceeds paid to the supplier in that same
+   transaction. Alternatively, have any connected wallet choose **Settle and
+   pay supplier**; that caller pays the transaction fee.
+8. On a separate listing, submit a bid above its buyout price. Show the former
    leader's refund, the bidder's same-transaction excess refund, the permanent
-   closed status, and the supplier's exact buyout claim.
+   closed status, and then have any wallet trigger the exact buyout payout.
 
 ## 11. Source map
 

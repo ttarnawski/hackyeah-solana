@@ -779,8 +779,15 @@ h1 {
 }
 
 .auction-admin-action,
-.auction-claim-action {
+.auction-claim-action,
+.auction-metadata-edit-action {
   justify-self: start;
+}
+
+.metadata-edit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 @media (max-width: 520px) {

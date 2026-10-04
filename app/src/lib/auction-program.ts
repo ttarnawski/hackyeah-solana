@@ -17,6 +17,7 @@ const REQUIRED_INSTRUCTIONS = [
   "initialize_config",
   "create_listing",
   "initialize_listing_metadata",
+  "update_listing_metadata",
   "verify_supplier_kyb",
   "place_bid",
   "claim_funds",
@@ -377,6 +378,28 @@ export async function initializeOnChainListingMetadata(
     .rpc();
 }
 
+export async function updateOnChainListingMetadata(
+  connection: Connection,
+  wallet: AnchorWallet,
+  auctionAddress: PublicKey,
+  input: {
+    title: string;
+    description: string;
+  },
+): Promise<string> {
+  validateListingMetadata(input.title, input.description);
+  const { program, programId } = await getWalletProgram(connection, wallet);
+  return program.methods
+    .updateListingMetadata(input.title, input.description)
+    .accountsPartial({
+      auction: auctionAddress,
+      listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
+      supplier: wallet.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+}
+
 export async function setSupplierKybVerified(
   connection: Connection,
   wallet: AnchorWallet,
@@ -428,12 +451,13 @@ export async function placeOnChainBid(
       vault,
       bidder: wallet.publicKey,
       previousWinner,
+      supplier: new PublicKey(auction.supplier),
       systemProgram: SystemProgram.programId,
     })
     .rpc();
 }
 
-export async function claimSupplierFunds(
+export async function settleAndPaySupplier(
   connection: Connection,
   wallet: AnchorWallet,
   auction: OnChainAuction,
@@ -446,7 +470,8 @@ export async function claimSupplierFunds(
       auction: auctionAddress,
       listingMetadata: deriveListingMetadataPda(auctionAddress, programId),
       vault: deriveVaultPda(auctionAddress, programId),
-      supplier: wallet.publicKey,
+      supplier: new PublicKey(auction.supplier),
+      caller: wallet.publicKey,
       systemProgram: SystemProgram.programId,
     })
     .rpc();

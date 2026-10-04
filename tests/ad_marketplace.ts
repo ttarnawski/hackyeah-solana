@@ -136,6 +136,29 @@ describe("ad_marketplace initial and recurring auctions", function () {
     assert.equal(initialMetadata.buyoutPrice.toString(), sol(5).toString());
     assert.equal(initialMetadata.isClosed, false);
 
+    await program.methods
+      .updateListingMetadata(
+        "Homepage hero placement",
+        "Updated recurring advertising space information for the supplier's listing.",
+      )
+      .accountsPartial({
+        auction,
+        listingMetadata,
+        supplier: supplier.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([supplier])
+      .rpc();
+    const updatedMetadata = await program.account.listingMetadata.fetch(
+      listingMetadata,
+      "confirmed",
+    );
+    assert.equal(updatedMetadata.title, "Homepage hero placement");
+    assert.equal(
+      updatedMetadata.description,
+      "Updated recurring advertising space information for the supplier's listing.",
+    );
+
     await expectInstructionFailure(
       program.methods
         .placeBid(sol(1), "https://example.com/ad-a")
@@ -145,6 +168,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
           vault,
           bidder: bidderA.publicKey,
           previousWinner: bidderA.publicKey,
+          supplier: supplier.publicKey,
           systemProgram: SystemProgram.programId,
         })
         .signers([bidderA])
@@ -170,6 +194,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault,
         bidder: bidderA.publicKey,
         previousWinner: bidderA.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderA])
@@ -202,6 +227,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault,
         bidder: bidderB.publicKey,
         previousWinner: bidderA.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderB])
@@ -229,6 +255,10 @@ describe("ad_marketplace initial and recurring auctions", function () {
     );
 
     const bidC = sol(0.5);
+    const supplierBalanceBeforeInitialPayout = await connection.getBalance(
+      supplier.publicKey,
+      "confirmed",
+    );
     const bidderCBalanceBeforeBid = await connection.getBalance(
       bidderC.publicKey,
       "confirmed",
@@ -241,6 +271,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault,
         bidder: bidderC.publicKey,
         previousWinner: bidderB.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderC])
@@ -253,7 +284,12 @@ describe("ad_marketplace initial and recurring auctions", function () {
     );
     assert.equal(
       await connection.getBalance(vault, "confirmed"),
-      bidB.add(bidC).toNumber(),
+      bidC.toNumber(),
+    );
+    assert.equal(
+      (await connection.getBalance(supplier.publicKey, "confirmed")) -
+        supplierBalanceBeforeInitialPayout,
+      bidB.toNumber(),
     );
 
     const auctionAfterRollover = await program.account.auction.fetch(
@@ -265,10 +301,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
       auctionAfterRollover.cycleStartTs.toString(),
       initialAuctionEndTs.toString(),
     );
-    assert.equal(
-      auctionAfterRollover.supplierClaimable.toNumber(),
-      bidB.toNumber(),
-    );
+    assert.equal(auctionAfterRollover.supplierClaimable.toNumber(), 0);
     assert.equal(
       auctionAfterRollover.currentHighestBid.toNumber(),
       bidC.toNumber(),
@@ -284,47 +317,15 @@ describe("ad_marketplace initial and recurring auctions", function () {
       "https://example.com/ad-c",
     );
 
-    const supplierBalanceBeforeClaim = await connection.getBalance(
-      supplier.publicKey,
-      "confirmed",
-    );
-    await program.methods
-      .claimFunds()
-      .accountsPartial({
-        auction,
-        listingMetadata,
-        vault,
-        supplier: supplier.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([supplier])
-      .rpc();
-
-    assert.equal(
-      (await connection.getBalance(supplier.publicKey, "confirmed")) -
-        supplierBalanceBeforeClaim,
-      bidB.toNumber(),
-    );
-    assert.equal(
-      await connection.getBalance(vault, "confirmed"),
-      bidC.toNumber(),
-    );
-
-    const auctionAfterInitialClaim = await program.account.auction.fetch(
-      auction,
-      "confirmed",
-    );
-    assert.equal(auctionAfterInitialClaim.supplierClaimable.toNumber(), 0);
-    assert.equal(
-      auctionAfterInitialClaim.currentHighestBid.toNumber(),
-      bidC.toNumber(),
-    );
-
     await advanceSurfpoolClockToTimestamp(
       connection,
       initialAuctionEndTs.toNumber() + 3,
     );
     const bidD = sol(0.75);
+    const supplierBalanceBeforeRecurringPayout = await connection.getBalance(
+      supplier.publicKey,
+      "confirmed",
+    );
     await program.methods
       .placeBid(bidD, "https://example.com/ad-d")
       .accountsPartial({
@@ -333,6 +334,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault,
         bidder: bidderA.publicKey,
         previousWinner: bidderC.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderA])
@@ -343,23 +345,27 @@ describe("ad_marketplace initial and recurring auctions", function () {
       "confirmed",
     );
     assert.equal(auctionAfterRecurringRollover.cycleNumber.toNumber(), 2);
-    assert.equal(
-      auctionAfterRecurringRollover.supplierClaimable.toNumber(),
-      bidC.toNumber(),
-    );
+    assert.equal(auctionAfterRecurringRollover.supplierClaimable.toNumber(), 0);
     assert.equal(
       auctionAfterRecurringRollover.currentHighestBid.toNumber(),
       bidD.toNumber(),
     );
     assert.equal(
       await connection.getBalance(vault, "confirmed"),
-      bidC.add(bidD).toNumber(),
+      bidD.toNumber(),
+    );
+    assert.equal(
+      (await connection.getBalance(supplier.publicKey, "confirmed")) -
+        supplierBalanceBeforeRecurringPayout,
+      bidC.toNumber(),
     );
 
-    const supplierBalanceBeforeRecurringClaim = await connection.getBalance(
-      supplier.publicKey,
-      "confirmed",
+    await advanceSurfpoolClockToTimestamp(
+      connection,
+      initialAuctionEndTs.toNumber() + 6,
     );
+    const supplierBalanceBeforePermissionlessSettlement =
+      await connection.getBalance(supplier.publicKey, "confirmed");
     await program.methods
       .claimFunds()
       .accountsPartial({
@@ -367,18 +373,26 @@ describe("ad_marketplace initial and recurring auctions", function () {
         listingMetadata,
         vault,
         supplier: supplier.publicKey,
+        caller: bidderB.publicKey,
         systemProgram: SystemProgram.programId,
       })
-      .signers([supplier])
+      .signers([bidderB])
       .rpc();
     assert.equal(
       (await connection.getBalance(supplier.publicKey, "confirmed")) -
-        supplierBalanceBeforeRecurringClaim,
-      bidC.toNumber(),
+        supplierBalanceBeforePermissionlessSettlement,
+      bidD.toNumber(),
+    );
+    assert.equal(await connection.getBalance(vault, "confirmed"), 0);
+    const auctionAfterPermissionlessSettlement =
+      await program.account.auction.fetch(auction, "confirmed");
+    assert.equal(
+      auctionAfterPermissionlessSettlement.supplierClaimable.toNumber(),
+      0,
     );
     assert.equal(
-      await connection.getBalance(vault, "confirmed"),
-      bidD.toNumber(),
+      auctionAfterPermissionlessSettlement.currentHighestBid.toNumber(),
+      0,
     );
 
     const buyoutListingId = new anchor.BN(listingId.toString()).addn(1);
@@ -433,6 +447,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault: buyoutVault,
         bidder: bidderA.publicKey,
         previousWinner: bidderA.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderA])
@@ -451,6 +466,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
         vault: buyoutVault,
         bidder: bidderC.publicKey,
         previousWinner: bidderA.publicKey,
+        supplier: supplier.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([bidderC])
@@ -493,6 +509,7 @@ describe("ad_marketplace initial and recurring auctions", function () {
           vault: buyoutVault,
           bidder: bidderB.publicKey,
           previousWinner: bidderC.publicKey,
+          supplier: supplier.publicKey,
           systemProgram: SystemProgram.programId,
         })
         .signers([bidderB])
@@ -511,9 +528,10 @@ describe("ad_marketplace initial and recurring auctions", function () {
         listingMetadata: buyoutMetadata,
         vault: buyoutVault,
         supplier: supplier.publicKey,
+        caller: bidderB.publicKey,
         systemProgram: SystemProgram.programId,
       })
-      .signers([supplier])
+      .signers([bidderB])
       .rpc();
     assert.equal(
       (await connection.getBalance(supplier.publicKey, "confirmed")) -

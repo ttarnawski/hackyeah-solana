@@ -105,6 +105,36 @@ pub struct InitializeListingMetadata<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(title: String, description: String)]
+pub struct UpdateListingMetadata<'info> {
+    #[account(
+        seeds = [AUCTION_SEED, supplier.key().as_ref(), &auction.listing_id.to_le_bytes()],
+        bump = auction.bump,
+        has_one = supplier
+    )]
+    pub auction: Account<'info, Auction>,
+
+    #[account(
+        mut,
+        realloc = ListingMetadata::space(
+            title.len().min(MAX_LISTING_TITLE_LENGTH),
+            description.len().min(MAX_LISTING_DESCRIPTION_LENGTH)
+        ),
+        realloc::payer = supplier,
+        realloc::zero = false,
+        seeds = [LISTING_METADATA_SEED, auction.key().as_ref()],
+        bump = listing_metadata.bump,
+        has_one = auction
+    )]
+    pub listing_metadata: Account<'info, ListingMetadata>,
+
+    #[account(mut)]
+    pub supplier: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
 pub struct VerifySupplierKyb<'info> {
     #[account(
         seeds = [CONFIG_SEED],
@@ -156,6 +186,10 @@ pub struct PlaceBid<'info> {
     #[account(mut)]
     pub previous_winner: UncheckedAccount<'info>,
 
+    /// CHECK: This address is constrained to the listing supplier and only receives payouts.
+    #[account(mut, address = auction.supplier)]
+    pub supplier: UncheckedAccount<'info>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -163,9 +197,8 @@ pub struct PlaceBid<'info> {
 pub struct ClaimFunds<'info> {
     #[account(
         mut,
-        seeds = [AUCTION_SEED, supplier.key().as_ref(), &auction.listing_id.to_le_bytes()],
-        bump = auction.bump,
-        has_one = supplier
+        seeds = [AUCTION_SEED, auction.supplier.as_ref(), &auction.listing_id.to_le_bytes()],
+        bump = auction.bump
     )]
     pub auction: Account<'info, Auction>,
 
@@ -185,8 +218,12 @@ pub struct ClaimFunds<'info> {
     )]
     pub vault: UncheckedAccount<'info>,
 
+    /// CHECK: This address is constrained to the listing supplier and only receives payouts.
+    #[account(mut, address = auction.supplier)]
+    pub supplier: UncheckedAccount<'info>,
+
     #[account(mut)]
-    pub supplier: Signer<'info>,
+    pub caller: Signer<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -264,16 +301,26 @@ pub fn handle_initialize_listing_metadata(
         CustomError::BuyoutPriceTooLow
     );
 
-    ctx.accounts
-        .listing_metadata
-        .set_inner(ListingMetadata {
-            auction: ctx.accounts.auction.key(),
-            title,
-            description,
-            buyout_price,
-            is_closed: false,
-            bump: ctx.bumps.listing_metadata,
-        });
+    ctx.accounts.listing_metadata.set_inner(ListingMetadata {
+        auction: ctx.accounts.auction.key(),
+        title,
+        description,
+        buyout_price,
+        is_closed: false,
+        bump: ctx.bumps.listing_metadata,
+    });
+    Ok(())
+}
+
+pub fn handle_update_listing_metadata(
+    ctx: Context<UpdateListingMetadata>,
+    title: String,
+    description: String,
+) -> Result<()> {
+    validate_listing_metadata(&title, &description)?;
+    let metadata = &mut ctx.accounts.listing_metadata;
+    metadata.title = title;
+    metadata.description = description;
     Ok(())
 }
 
@@ -301,8 +348,16 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
     );
 
     let now = Clock::get()?.unix_timestamp;
+    let auction_key = ctx.accounts.auction.key();
     let auction = &mut ctx.accounts.auction;
     settle_expired_cycle(auction, now)?;
+    pay_supplier_claimable(
+        auction,
+        &ctx.accounts.system_program,
+        &ctx.accounts.vault,
+        &auction_key,
+        ctx.accounts.supplier.to_account_info(),
+    )?;
 
     require!(
         bid_amount > auction.current_highest_bid,
@@ -311,7 +366,6 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
 
     let buyout_price = ctx.accounts.listing_metadata.buyout_price;
     let triggers_buyout = buyout_price > 0 && bid_amount >= buyout_price;
-    let auction_key = auction.key();
     let vault_bump = auction.vault_bump;
     if auction.current_winner != Pubkey::default() {
         require_keys_eq!(
@@ -371,6 +425,7 @@ pub fn handle_place_bid(ctx: Context<PlaceBid>, bid_amount: u64, ad_url: String)
 
 pub fn handle_claim_funds(ctx: Context<ClaimFunds>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
+    let auction_key = ctx.accounts.auction.key();
     let auction = &mut ctx.accounts.auction;
     if !ctx.accounts.listing_metadata.is_closed {
         settle_expired_cycle(auction, now)?;
@@ -378,16 +433,12 @@ pub fn handle_claim_funds(ctx: Context<ClaimFunds>) -> Result<()> {
 
     let payout = auction.supplier_claimable;
     require!(payout > 0, CustomError::NoFundsToClaim);
-    auction.supplier_claimable = 0;
-
-    let auction_key = auction.key();
-    transfer_from_vault(
+    pay_supplier_claimable(
+        auction,
         &ctx.accounts.system_program,
         &ctx.accounts.vault,
-        ctx.accounts.supplier.to_account_info(),
         &auction_key,
-        auction.vault_bump,
-        payout,
+        ctx.accounts.supplier.to_account_info(),
     )
 }
 
@@ -467,6 +518,28 @@ fn settle_current_bid(auction: &mut Auction) -> Result<()> {
     auction.ad_url_len = 0;
 
     Ok(())
+}
+
+fn pay_supplier_claimable<'info>(
+    auction: &mut Auction,
+    system_program: &Program<'info, System>,
+    vault: &UncheckedAccount<'info>,
+    auction_key: &Pubkey,
+    supplier: AccountInfo<'info>,
+) -> Result<()> {
+    let payout = auction.supplier_claimable;
+    if payout == 0 {
+        return Ok(());
+    }
+    auction.supplier_claimable = 0;
+    transfer_from_vault(
+        system_program,
+        vault,
+        supplier,
+        auction_key,
+        auction.vault_bump,
+        payout,
+    )
 }
 
 fn transfer_from_vault<'info>(

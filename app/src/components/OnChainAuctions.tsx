@@ -14,14 +14,15 @@ import { PublicKey } from "@solana/web3.js";
 import { lamportsToSol, solToLamports } from "../lib/amounts";
 import { toLocalDateTimeInput } from "../lib/datetime";
 import {
-  claimSupplierFunds,
   createListingId,
   createOnChainListing,
   fetchAuctionSnapshot,
   initializeAdminConfig,
   initializeOnChainListingMetadata,
   placeOnChainBid,
+  settleAndPaySupplier,
   setSupplierKybVerified,
+  updateOnChainListingMetadata,
   type AuctionSnapshot,
   type OnChainAuction,
 } from "../lib/auction-program";
@@ -171,6 +172,22 @@ export function OnChainAuctions({
         ),
     );
 
+  const updateMetadata = (
+    auction: OnChainAuction,
+    input: { title: string; description: string },
+  ) =>
+    void runTransaction(
+      `update-metadata:${auction.address}`,
+      `Public details updated for listing ${auction.listingId}.`,
+      (wallet) =>
+        updateOnChainListingMetadata(
+          connection,
+          wallet,
+          new PublicKey(auction.address),
+          input,
+        ),
+    );
+
   const verifySupplier = (auction: OnChainAuction, isVerified: boolean) =>
     void runTransaction(
       `verify:${auction.address}`,
@@ -206,9 +223,9 @@ export function OnChainAuctions({
 
   const claimFunds = (auction: OnChainAuction) =>
     void runTransaction(
-      `claim:${auction.address}`,
-      `Supplier funds claimed for listing ${auction.listingId}.`,
-      (wallet) => claimSupplierFunds(connection, wallet, auction),
+      `settle-payout:${auction.address}`,
+      `Settled proceeds paid to the supplier for listing ${auction.listingId}.`,
+      (wallet) => settleAndPaySupplier(connection, wallet, auction),
     );
 
   const sectionHeading =
@@ -348,6 +365,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -394,6 +412,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -433,6 +452,7 @@ export function OnChainAuctions({
                   onInitializeMetadata={initializeMetadata}
                   onPlaceBid={placeBid}
                   onSetVerified={verifySupplier}
+                  onUpdateMetadata={updateMetadata}
                   walletAddress={walletAddress}
                 />
               ))}
@@ -659,6 +679,10 @@ interface AuctionCardProps {
     adUrl: string,
   ) => void;
   onSetVerified: (auction: OnChainAuction, isVerified: boolean) => void;
+  onUpdateMetadata: (
+    auction: OnChainAuction,
+    input: { title: string; description: string },
+  ) => void;
   walletAddress: string | null;
 }
 
@@ -671,6 +695,7 @@ function AuctionCard({
   onInitializeMetadata,
   onPlaceBid,
   onSetVerified,
+  onUpdateMetadata,
   walletAddress,
 }: AuctionCardProps) {
   const [amountSol, setAmountSol] = useState("");
@@ -679,6 +704,12 @@ function AuctionCard({
   const [metadataDescription, setMetadataDescription] = useState("");
   const [metadataBuyoutPriceSol, setMetadataBuyoutPriceSol] = useState("0");
   const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [editingMetadata, setEditingMetadata] = useState(false);
+  const [updatedTitle, setUpdatedTitle] = useState("");
+  const [updatedDescription, setUpdatedDescription] = useState("");
+  const [updateMetadataError, setUpdateMetadataError] = useState<string | null>(
+    null,
+  );
   const isAdmin = walletAddress !== null && walletAddress === adminAddress;
   const isSupplier =
     walletAddress !== null && walletAddress === auction.supplier;
@@ -729,6 +760,38 @@ function AuctionCard({
     }
   }
 
+  function openMetadataEditor() {
+    setUpdatedTitle(auction.title ?? "");
+    setUpdatedDescription(auction.description ?? "");
+    setUpdateMetadataError(null);
+    setEditingMetadata(true);
+  }
+
+  function submitMetadataUpdate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setUpdateMetadataError(null);
+    if (updatedTitle.trim().length === 0) {
+      setUpdateMetadataError("Enter a listing title.");
+      return;
+    }
+    if (new TextEncoder().encode(updatedTitle).length > 100) {
+      setUpdateMetadataError(
+        "Listing title must be no more than 100 UTF-8 bytes.",
+      );
+      return;
+    }
+    if (new TextEncoder().encode(updatedDescription).length > 3_000) {
+      setUpdateMetadataError(
+        "Listing description must be no more than 3000 UTF-8 bytes.",
+      );
+      return;
+    }
+    onUpdateMetadata(auction, {
+      title: updatedTitle,
+      description: updatedDescription,
+    });
+  }
+
   return (
     <article className="listing-card auction-card">
       <div className="listing-card-heading">
@@ -751,6 +814,73 @@ function AuctionCard({
       </div>
       {auction.description && (
         <p className="auction-description">{auction.description}</p>
+      )}
+      {isSupplier && auction.metadataInitialized && (
+        <div className="auction-metadata-editor">
+          {editingMetadata ? (
+            <form
+              className="listing-form metadata-form"
+              onSubmit={submitMetadataUpdate}
+            >
+              <label>
+                Public listing name
+                <input
+                  maxLength={100}
+                  onChange={(event) => setUpdatedTitle(event.target.value)}
+                  required
+                  value={updatedTitle}
+                />
+              </label>
+              <label>
+                Public description
+                <textarea
+                  maxLength={3_000}
+                  onChange={(event) =>
+                    setUpdatedDescription(event.target.value)
+                  }
+                  required
+                  rows={3}
+                  value={updatedDescription}
+                />
+                <span className="input-unit">
+                  {new TextEncoder().encode(updatedDescription).length}/3000
+                  UTF-8 bytes
+                </span>
+              </label>
+              {updateMetadataError && (
+                <div className="notice error-notice" role="alert">
+                  {updateMetadataError}
+                </div>
+              )}
+              <div className="metadata-edit-actions">
+                <button
+                  className="primary-button"
+                  disabled={busy}
+                  type="submit"
+                >
+                  {busy ? "Waiting for wallet…" : "Save listing details"}
+                </button>
+                <button
+                  className="secondary-button"
+                  disabled={busy}
+                  onClick={() => setEditingMetadata(false)}
+                  type="button"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : (
+            <button
+              className="secondary-button auction-metadata-edit-action"
+              disabled={busy}
+              onClick={openMetadataEditor}
+              type="button"
+            >
+              Edit listing details
+            </button>
+          )}
+        </div>
       )}
       <div className="listing-terms auction-terms">
         <span>Supplier {shortAddress(auction.supplier)}</span>
@@ -864,6 +994,12 @@ function AuctionCard({
           {lamportsToSol(unsettledBidAmount.toString())} SOL
         </p>
       )}
+      {settlementDue && unsettledBidAmount > 0n && !auction.isClosed && (
+        <p className="form-hint">
+          The next successful bid will settle this cycle and pay its proceeds to
+          the supplier in the same transaction.
+        </p>
+      )}
 
       {isAdmin && (
         <button
@@ -942,17 +1078,24 @@ function AuctionCard({
         </form>
       )}
 
-      {isSupplier &&
+      {walletAddress &&
         auction.metadataInitialized &&
         claimableAfterSettlement > 0n && (
-          <button
-            className="secondary-button auction-claim-action"
-            disabled={busy}
-            onClick={() => onClaim(auction)}
-            type="button"
-          >
-            Claim {lamportsToSol(claimableAfterSettlement.toString())} SOL
-          </button>
+          <>
+            <p className="form-hint">
+              Any connected wallet can trigger this payout; the supplier
+              receives the SOL and the caller pays the transaction fee.
+            </p>
+            <button
+              className="secondary-button auction-claim-action"
+              disabled={busy}
+              onClick={() => onClaim(auction)}
+              type="button"
+            >
+              Settle and pay supplier{" "}
+              {lamportsToSol(claimableAfterSettlement.toString())} SOL
+            </button>
+          </>
         )}
     </article>
   );
